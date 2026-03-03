@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tukios Admin — Aftercare Text Demo</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; }
+
+.app { display: flex; height: 100vh; }
+
+/* ================================================
+   SIDEBAR — Matching Tukios admin exactly
+   ================================================ */
+.sidebar {
+  width: 210px; min-width: 210px; background: #1e293b;
+  display: flex; flex-direction: column; height: 100vh;
+}
+.sidebar-logo {
+  padding: 16px 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.logo-box {
+  border: 1.5px solid rgba(255,255,255,0.3); border-radius: 4px;
+  padding: 6px 10px; text-align: center;
+}
+.logo-top { font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 2px; line-height: 1; }
+.logo-div { height: 1px; background: rgba(255,255,255,0.3); margin: 3px 0; }
+.logo-bot { font-size: 8px; font-weight: 600; color: rgba(255,255,255,0.8); letter-spacing: 3px; line-height: 1; }
+.collapse-btn {
+  background: none; border: none; color: rgba(255,255,255,0.5);
+  font-size: 18px; cursor: pointer; padding: 4px;
+}
+.collapse-btn:hover { color: #fff; }
+
+.sidebar-nav { flex: 1; padding: 4px 8px; }
+.sidebar-bottom { padding: 4px 8px; }
+.sidebar-sep { height: 1px; background: rgba(255,255,255,0.1); margin: 4px 20px; }
+
+.nav-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 9px 12px; border: none; background: none;
+  color: rgba(255,255,255,0.7); font-size: 14px; font-weight: 500;
+  font-family: inherit; cursor: pointer; border-radius: 6px;
+  transition: all 0.15s; text-align: left;
+}
+.nav-item:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.nav-item.active { background: rgba(56, 152, 236, 0.2); color: #fff; }
+.nav-icon { display: flex; align-items: center; justify-content: center; width: 20px; flex-shrink: 0; }
+.nav-label { flex: 1; white-space: nowrap; }
+.nav-badge {
+  font-size: 11px; font-weight: 600; padding: 1px 8px;
+  border-radius: 10px; line-height: 18px; flex-shrink: 0;
+}
+.nav-badge.green { background: #22c55e; color: #fff; }
+.nav-badge.red { background: #e74c3c; color: #fff; }
+.nav-ext { color: rgba(255,255,255,0.4); display: flex; align-items: center; margin-left: auto; font-size: 11px; }
+
+.sidebar-new {
+  padding: 12px 20px; display: flex; align-items: center; gap: 8px;
+  color: rgba(255,255,255,0.6); font-size: 13px; font-weight: 500;
+  cursor: pointer; border-top: 1px solid rgba(255,255,255,0.08); margin-top: 8px;
+}
+.sidebar-new:hover { color: #fff; }
+
+/* ================================================
+   MAIN AREA
+   ================================================ */
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+/* Top bar */
+.topbar {
+  height: 56px; background: #fff; border-bottom: 1px solid #e2e6ec;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px; flex-shrink: 0;
+}
+.breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.bc-org { font-weight: 500; color: #1a1a2e; }
+.bc-sep { color: #ccc; }
+.bc-page { font-weight: 600; color: #1a1a2e; }
+.topbar-right { display: flex; align-items: center; gap: 16px; }
+.topbar-avatar {
+  width: 36px; height: 36px; border-radius: 50%; background: #1e293b;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.topbar-add {
+  width: 40px; height: 40px; border-radius: 50%; background: #3b82f6;
+  color: #fff; border: none; font-size: 24px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; font-weight: 300;
+}
+
+/* Content area */
+.content { flex: 1; background: #edf0f4; overflow-y: auto; }
+
+/* Obituaries page */
+.obit-page { padding: 20px 24px; }
+.obit-search {
+  width: 100%; padding: 10px 40px 10px 16px; border: 1px solid #dde1e8;
+  border-radius: 6px; font-size: 14px; font-family: inherit; background: #fff; outline: none;
+  margin-bottom: 16px;
+}
+.obit-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.obit-count { font-size: 13px; color: #5a5d72; }
+.obit-toolbar-r { display: flex; align-items: center; gap: 16px; }
+.obit-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.obit-card {
+  background: #fff; border: 1px solid #e2e6ec; border-radius: 10px;
+  padding: 20px 16px 12px; text-align: center; position: relative; cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+.obit-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+.obit-photo {
+  width: 72px; height: 72px; border-radius: 50%; margin: 0 auto 10px;
+  overflow: hidden; background: #e2e6ec; display: flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: 600; color: #8b8fa3;
+}
+.obit-name { font-size: 14px; font-weight: 600; color: #1a1a2e; margin-bottom: 2px; }
+.obit-date { font-size: 12px; color: #8b8fa3; margin-bottom: 6px; }
+.obit-status {
+  display: inline-block; font-size: 11px; font-weight: 600;
+  padding: 2px 10px; border-radius: 10px; margin-bottom: 12px;
+}
+.obit-status.published { color: #22c55e; background: #f0fdf4; }
+.obit-status.draft { color: #eab308; background: #fefce8; }
+.obit-pin { position: absolute; top: 10px; right: 14px; font-size: 16px; color: #f59e0b; }
+.obit-pin.off { color: #ccc; }
+.obit-dot { position: absolute; top: 12px; left: 14px; color: #e74c3c; font-size: 10px; }
+.obit-foot { display: flex; align-items: center; justify-content: space-between; padding-top: 10px; border-top: 1px solid #f0f2f5; }
+.obit-loc { font-size: 11px; color: #8b8fa3; }
+
+/* Aftercare text page */
+.aftercare-page { height: 100%; display: flex; flex-direction: column; }
+#aftercare-text-root { flex: 1; height: 100%; }
+
+/* Hide/show pages */
+.page-hidden { display: none; }
+
+/* Toggle select */
+.loc-select {
+  padding: 8px 32px 8px 12px; border: 1px solid #dde1e8; border-radius: 6px;
+  font-size: 13px; font-family: inherit; background: #fff; cursor: pointer;
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-box">
+        <div class="logo-top">SONZINI</div>
+        <div class="logo-div"></div>
+        <div class="logo-bot">MORTUARY</div>
+      </div>
+      <button class="collapse-btn">«</button>
+    </div>
+    <div class="sidebar-nav" id="sidebar-nav">
+      <button class="nav-item" data-page="dashboard">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
+        <span class="nav-label">Dashboard</span>
+        <span class="nav-badge green">2</span>
+      </button>
+      <button class="nav-item active" data-page="obituaries">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span>
+        <span class="nav-label">Obituaries</span>
+        <span class="nav-badge green">8</span>
+      </button>
+      <button class="nav-item" data-page="audience">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+        <span class="nav-label">Audience</span>
+        <span class="nav-badge green">29</span>
+      </button>
+      <button class="nav-item" data-page="aftercare-text">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+        <span class="nav-label">Aftercare Text</span>
+        <span class="nav-badge red" id="aftercare-text-nav-badge" style="display:none;"></span>
+      </button>
+      <button class="nav-item" data-page="website-content">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
+        <span class="nav-label">Website Content</span>
+      </button>
+      <button class="nav-item" data-page="users">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
+        <span class="nav-label">Users</span>
+      </button>
+      <button class="nav-item" data-page="events">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
+        <span class="nav-label">Events</span>
+      </button>
+      <button class="nav-item" data-page="reports">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg></span>
+        <span class="nav-label">Reports</span>
+      </button>
+      <button class="nav-item" data-page="proofs">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+        <span class="nav-label">Proofs</span>
+      </button>
+      <button class="nav-item" data-page="settings">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+        <span class="nav-label">Settings</span>
+      </button>
+    </div>
+    <div class="sidebar-sep"></div>
+    <div class="sidebar-bottom">
+      <button class="nav-item">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></span>
+        <span class="nav-label">Website Manager</span>
+        <span class="nav-ext">↗</span>
+      </button>
+      <button class="nav-item">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2L3 7v13a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-3-5z"/><line x1="3" y1="7" x2="21" y2="7"/><path d="M16 11a4 4 0 0 1-8 0"/></svg></span>
+        <span class="nav-label">Partner Store</span>
+        <span class="nav-ext">↗</span>
+      </button>
+      <button class="nav-item">
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+        <span class="nav-label">Support</span>
+        <span class="nav-ext">↗</span>
+      </button>
+    </div>
+    <div class="sidebar-new">🎉 <span>What's New</span></div>
+  </div>
+
+  <!-- MAIN AREA -->
+  <div class="main">
+    <!-- TOP BAR -->
+    <div class="topbar">
+      <div class="breadcrumb">
+        <span>🏛</span>
+        <span class="bc-org">Sonzini Mortuary</span>
+        <span class="bc-sep">/</span>
+        <span class="bc-page" id="bc-page">Obituaries</span>
+      </div>
+      <div class="topbar-right">
+        <div id="topbar-extra"></div>
+        <div class="topbar-avatar">SM</div>
+      </div>
+    </div>
+
+    <!-- CONTENT -->
+    <div class="content">
+      <!-- Obituaries Page -->
+      <div class="obit-page" id="page-obituaries">
+        <input class="obit-search" placeholder="Search obituaries" />
+        <div class="obit-toolbar">
+          <span class="obit-count">Showing 1 to 20 of 628 results</span>
+          <div class="obit-toolbar-r">
+            <span style="font-size:13px;color:#5a5d72;">Only <span style="color:#e74c3c;">●</span></span>
+            <select class="loc-select"><option>Choose Location</option></select>
+          </div>
+        </div>
+        <div class="obit-grid" id="obit-grid"></div>
+      </div>
+
+      <!-- Aftercare Text Page -->
+      <div class="aftercare-page page-hidden" id="page-aftercare-text">
+        <!--
+          ========================================
+          THIS IS THE ONLY DIV TUKIOS NEEDS
+          The script tag does everything else.
+          ========================================
+        -->
+        <div id="aftercare-text-root"></div>
+      </div>
+
+      <!-- Generic placeholder for other pages -->
+      <div class="page-hidden" id="page-placeholder" style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;color:#8b8fa3;">
+        <div style="font-size:48px;margin-bottom:16px;">📄</div>
+        <div style="font-size:20px;font-weight:600;color:#1a1a2e;" id="placeholder-title">Page</div>
+        <div style="font-size:14px;margin-top:4px;">This page is a placeholder for the demo.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ================================================================
+// TUKIOS ADMIN SHELL — Navigation Logic
+// ================================================================
+const pageNames = {
+  'dashboard':'Dashboard','obituaries':'Obituaries','audience':'Audience',
+  'aftercare-text':'Aftercare Text','website-content':'Website Content',
+  'users':'Users','events':'Events','reports':'Reports','proofs':'Proofs','settings':'Settings',
+};
+
+const obits = [
+  { name:'kyle 3', date:'Dec 15, 9999', status:'Published', pin:true, dot:true },
+  { name:'John Doe', date:'Mar 30, 2023', status:'Published', pin:true },
+  { name:'Garrett Otto', date:'Oct 8, 2022', status:'Draft', pin:true },
+  { name:'Joe Pistachio', date:'Sep 9, 9999', status:'Published' },
+  { name:'John "J.D" Doe', date:'Feb 5, 3000', status:'Draft' },
+  { name:'Morgan Test', date:'Aug 14, 3000', status:'Published' },
+  { name:'Ferdinand J Vanderhoek', date:'Feb 2, 2250', status:'Draft' },
+  { name:'Gracie Lou Hart', date:'Nov 16, 2122', status:'Draft' },
+];
+
+// Render obituary cards
+document.getElementById('obit-grid').innerHTML = obits.map(o => `
+  <div class="obit-card">
+    ${o.dot ? '<span class="obit-dot">●</span>' : ''}
+    <span class="obit-pin ${o.pin ? '' : 'off'}">${o.pin ? '★' : '☆'}</span>
+    <div class="obit-photo">${o.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()}</div>
+    <div class="obit-name">${o.name}</div>
+    <div class="obit-date">${o.date}</div>
+    <div class="obit-status ${o.status.toLowerCase()}">${o.status}</div>
+    <div class="obit-foot"><span class="obit-loc">Sonzini Mortuary - Ogden</span></div>
+  </div>
+`).join('');
+
+// Navigation
+let currentPage = 'obituaries';
+document.querySelectorAll('.nav-item[data-page]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const page = btn.dataset.page;
+    if (page === currentPage) return;
+
+    // Update nav active state
+    document.querySelectorAll('.nav-item[data-page]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    // Update breadcrumb
+    document.getElementById('bc-page').textContent = pageNames[page] || page;
+
+    // Show/hide pages
+    document.getElementById('page-obituaries').classList.add('page-hidden');
+    document.getElementById('page-aftercare-text').classList.add('page-hidden');
+    document.getElementById('page-placeholder').classList.add('page-hidden');
+
+    // Top bar extras
+    document.getElementById('topbar-extra').innerHTML = '';
+
+    if (page === 'obituaries') {
+      document.getElementById('page-obituaries').classList.remove('page-hidden');
+      document.getElementById('topbar-extra').innerHTML = '<button class="topbar-add">+</button>';
+    } else if (page === 'aftercare-text') {
+      document.getElementById('page-aftercare-text').classList.remove('page-hidden');
+    } else {
+      document.getElementById('page-placeholder').classList.remove('page-hidden');
+      document.getElementById('placeholder-title').textContent = pageNames[page] || page;
+    }
+
+    currentPage = page;
+  });
+});
+
+// Set initial state
+document.getElementById('topbar-extra').innerHTML = '<button class="topbar-add">+</button>';
+</script>
+
+<!--
+  ============================================================
+  AFTERCARE TEXT WIDGET — This is the script from aftercare.com
+  In production, this <script> tag is the ONLY thing Tukios adds.
+  Everything above is their existing admin.
+  ============================================================
+-->
+<script>
+(function () {
+  'use strict';
+
+  function init() {
+    const root = document.getElementById('aftercare-text-root');
+    if (!root) return;
+    render(root);
+  }
+
+  function render(root) {
+    if (root.dataset.aftercareInit) return;
+    root.dataset.aftercareInit = 'true';
+    const styleEl = document.createElement('style');
+    styleEl.textContent = getStyles();
+    document.head.appendChild(styleEl);
+    root.innerHTML = getHTML();
+    bindEvents(root);
+    updateNavBadge(2);
+  }
+
+  function updateNavBadge(count) {
+    const badge = document.getElementById('aftercare-text-nav-badge');
+    if (badge) {
+      if (count > 0) { badge.textContent = count; badge.style.display = 'inline-block'; }
+      else { badge.style.display = 'none'; }
+    }
+  }
+
+  function getStyles() {
+    const S = '#aftercare-text-root';
+    return `
+${S} { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif; display: flex; flex-direction: column; height: 100%; color: #1a1a2e; }
+${S} * { margin: 0; padding: 0; box-sizing: border-box; }
+${S} .ac-topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; background: #fff; border-bottom: 1px solid #e2e6ec; flex-shrink: 0; }
+${S} .ac-topbar-left { font-size: 18px; font-weight: 700; color: #1a1a2e; }
+${S} .ac-topbar-settings { font-size: 13px; font-weight: 500; color: #4a6cf7; text-decoration: none; padding: 7px 14px; border: 1px solid #dde1e8; border-radius: 6px; transition: all 0.15s; }
+${S} .ac-topbar-settings:hover { border-color: #4a6cf7; background: #f0f3ff; }
+${S} .ac-inbox { display: flex; flex: 1; overflow: hidden; }
+${S} .ac-list { width: 300px; min-width: 300px; background: #fff; border-right: 1px solid #e2e6ec; display: flex; flex-direction: column; }
+${S} .ac-list-msgs { flex: 1; overflow-y: auto; }
+${S} .ac-group-hdr { padding: 10px 16px; font-size: 11px; font-weight: 600; color: #c0392b; text-transform: uppercase; letter-spacing: 0.5px; background: #fef8f7; border-bottom: 1px solid #fde8e5; display: flex; align-items: center; gap: 6px; }
+${S} .ac-group-count { font-size: 10px; background: #e74c3c; color: #fff; padding: 1px 6px; border-radius: 8px; font-weight: 700; }
+${S} .ac-divider { height: 1px; background: #dde1e8; margin: 12px 16px; }
+${S} .ac-msg { display: flex; align-items: flex-start; padding: 14px 16px; border-bottom: 1px solid #f0f2f5; cursor: pointer; transition: background 0.15s; }
+${S} .ac-msg:hover { background: #f8f9fb; }
+${S} .ac-msg.active { background: #eef2ff; border-left: 3px solid #4a6cf7; padding-left: 13px; }
+${S} .ac-msg-ind { width: 20px; min-width: 20px; padding-top: 4px; }
+${S} .ac-sparkle { font-size: 13px; color: #e74c3c; font-weight: 700; }
+${S} .ac-msg-body { flex: 1; min-width: 0; }
+${S} .ac-msg-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+${S} .ac-msg-name { font-weight: 600; font-size: 14px; }
+${S} .ac-msg-date { font-size: 12px; color: #8b8fa3; white-space: nowrap; }
+${S} .ac-msg-preview { font-size: 13px; color: #5a5d72; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+${S} .ac-dismiss { font-size: 11px; color: #8b8fa3; margin-top: 4px; cursor: pointer; transition: color 0.15s; }
+${S} .ac-dismiss:hover { color: #4a6cf7; }
+${S} .ac-convo { flex: 1; display: flex; flex-direction: column; background: #f8f9fb; }
+${S} .ac-convo-hdr { padding: 14px 24px; background: #fff; border-bottom: 1px solid #e2e6ec; display: flex; align-items: center; gap: 16px; }
+${S} .ac-convo-name { font-size: 15px; font-weight: 600; color: #1a1a2e; }
+${S} .ac-convo-phone { font-size: 12px; color: #8b8fa3; margin-top: 1px; }
+${S} .ac-convo-sep { width: 1px; height: 32px; background: #e2e6ec; }
+${S} .ac-convo-dec { font-size: 14px; font-weight: 500; color: #5a5d72; }
+${S} .ac-convo-ddate { font-size: 12px; color: #8b8fa3; margin-top: 1px; }
+${S} .ac-msgs { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+${S} .ac-sys { align-self: center; font-size: 11px; color: #8b8fa3; font-weight: 500; }
+${S} .ac-bubble { max-width: 75%; padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.5; }
+${S} .ac-bubble.out { align-self: flex-end; background: #4a6cf7; color: #fff; border-bottom-right-radius: 4px; }
+${S} .ac-bubble.in { align-self: flex-start; background: #fff; color: #1a1a2e; border: 1px solid #e2e6ec; border-bottom-left-radius: 4px; }
+${S} .ac-bubble.in.flagged { border-color: #f59e0b; border-width: 1.5px; box-shadow: 0 0 0 1px rgba(245,158,11,0.15); }
+${S} .ac-meta { font-size: 11px; opacity: 0.6; margin-top: 4px; }
+${S} .ac-bubble.out .ac-meta { text-align: right; }
+${S} .ac-flag { font-size: 12px; color: #92400e; font-weight: 500; padding: 4px 0; align-self: flex-start; }
+${S} .ac-flag-notif { color: #b0956a; font-weight: 400; }
+${S} .ac-reply { padding: 16px 24px; background: #fff; border-top: 1px solid #e2e6ec; display: flex; gap: 12px; align-items: center; }
+${S} .ac-reply-wrap { flex: 1; position: relative; display: flex; align-items: center; }
+${S} .ac-reply-wrap input { width: 100%; padding: 10px 70px 10px 14px; border: 1px solid #dde1e8; border-radius: 8px; font-size: 14px; font-family: inherit; background: #f8f9fb; outline: none; }
+${S} .ac-reply-wrap input:focus { border-color: #4a6cf7; }
+${S} .ac-reply-icons { position: absolute; right: 8px; display: flex; gap: 2px; }
+${S} .ac-reply-ibtn { width: 30px; height: 30px; border: none; background: transparent; cursor: pointer; font-size: 16px; border-radius: 6px; display: flex; align-items: center; justify-content: center; opacity: 0.4; transition: opacity 0.15s; }
+${S} .ac-reply-ibtn:hover { opacity: 0.8; }
+${S} .ac-send-btn { padding: 10px 20px; background: #4a6cf7; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
+${S} .ac-reply.suppressed { background: #fafafa; flex-direction: column; align-items: stretch; gap: 0; }
+${S} .ac-suppressed { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: #f8f0e5; border: 1px solid #f0d8b0; border-radius: 8px; font-size: 13px; color: #8a6d00; line-height: 1.4; }
+${S} .ac-suppressed-icon { font-size: 18px; flex-shrink: 0; }
+${S} .ac-detail { width: 260px; min-width: 260px; background: #fff; border-left: 1px solid #e2e6ec; padding: 20px; overflow-y: auto; }
+${S} .ac-detail h4 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #8b8fa3; margin-bottom: 10px; }
+${S} .ac-sched { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f5f7fa; cursor: pointer; transition: background 0.15s; font-size: 13px; }
+${S} .ac-sched:last-of-type { border-bottom: none; }
+${S} .ac-sched:hover { background: #f8f9fb; margin: 0 -8px; padding: 8px 8px; border-radius: 6px; }
+${S} .ac-sched-check { width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0; background: #2ecc71; color: #fff; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+${S} .ac-sched-pend { width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0; border: 2px solid #dde1e8; }
+${S} .ac-sched-name { flex: 1; font-weight: 500; }
+${S} .ac-sched-date { color: #8b8fa3; font-size: 12px; white-space: nowrap; }
+${S} .ac-stop-wrap { margin-top: 16px; padding-top: 12px; border-top: 1px solid #f0f2f5; }
+${S} .ac-stop { text-align: center; padding: 8px 0; font-size: 13px; color: #8b8fa3; cursor: pointer; transition: color 0.15s; }
+${S} .ac-stop:hover { color: #c0392b; }
+${S} .ac-modal-bg { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(26,26,46,0.5); z-index: 9000; align-items: center; justify-content: center; }
+${S} .ac-modal-bg.visible { display: flex; }
+@keyframes acModalIn { from { opacity: 0; transform: scale(0.95) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+${S} .ac-modal { width: 480px; max-width: 90vw; background: #fff; border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); overflow: hidden; animation: acModalIn 0.2s ease; }
+${S} .ac-modal-top { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 24px 16px; }
+${S} .ac-modal-title { font-size: 16px; font-weight: 700; color: #1a1a2e; }
+${S} .ac-modal-timing { font-size: 12px; color: #8b8fa3; margin-top: 2px; }
+${S} .ac-modal-close { width: 32px; height: 32px; border-radius: 8px; border: none; background: #f0f2f5; cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; color: #5a5d72; }
+${S} .ac-modal-msg { margin: 0 24px 20px; padding: 16px; background: #f0f3ff; border: 1px solid #dde3f7; border-radius: 10px; font-size: 14px; line-height: 1.6; color: #1a1a2e; white-space: pre-line; }
+${S} .ac-modal-foot { padding: 16px 24px; border-top: 1px solid #edf0f4; display: flex; justify-content: space-between; align-items: center; }
+${S} .ac-modal-del { padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; border: 1px solid #f5c6c6; background: #fff; color: #c0392b; cursor: pointer; font-family: inherit; transition: all 0.15s; }
+${S} .ac-modal-del:hover { background: #fdf0f0; border-color: #e74c3c; }
+${S} .ac-modal-done { padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; border: 1px solid #dde1e8; background: #fff; color: #5a5d72; cursor: pointer; font-family: inherit; }
+${S} .ac-confirm { width: 420px; max-width: 90vw; background: #fff; border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); overflow: hidden; animation: acModalIn 0.2s ease; padding: 28px; }
+${S} .ac-confirm h3 { font-size: 18px; font-weight: 700; margin-bottom: 12px; }
+${S} .ac-confirm p { font-size: 14px; color: #5a5d72; line-height: 1.6; margin-bottom: 8px; }
+${S} .ac-confirm-warn { background: #fff8e5; border: 1px solid #f0d060; border-radius: 8px; padding: 12px; font-size: 13px; color: #8a6d00; margin: 16px 0; }
+${S} .ac-confirm-acts { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+${S} .ac-confirm-acts button { padding: 9px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; border: none; }
+${S} .ac-cancel-btn { background: #f0f2f5; color: #5a5d72; }
+${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
+`;
+  }
+
+  function getHTML() {
+    return `
+<div class="ac-topbar"><div class="ac-topbar-left">Aftercare Text</div><a class="ac-topbar-settings" href="#" onclick="return false">⚙️ Aftercare Text Settings ↗</a></div>
+<div class="ac-inbox">
+  <div class="ac-list"><div class="ac-list-msgs">
+    <div class="ac-group-hdr">Needs Attention <span class="ac-group-count">2</span></div>
+    <div class="ac-msg active" data-id="margaret"><div class="ac-msg-ind"><span class="ac-sparkle">✦</span></div><div class="ac-msg-body"><div class="ac-msg-top"><span class="ac-msg-name">Margaret Williams</span><span class="ac-msg-date">2:02 PM</span></div><div class="ac-msg-preview">Thank you so much for remembering us. Could you tell me about grief coun...</div><div class="ac-dismiss" data-resolve="margaret">Mark resolved</div></div></div>
+    <div class="ac-msg" data-id="david"><div class="ac-msg-ind"><span class="ac-sparkle">✦</span></div><div class="ac-msg-body"><div class="ac-msg-top"><span class="ac-msg-name">David Chen</span><span class="ac-msg-date">11:30 AM</span></div><div class="ac-msg-preview">I appreciate that.. but what day are we remembering</div><div class="ac-dismiss" data-resolve="david">Mark resolved</div></div></div>
+    <div class="ac-divider"></div>
+    <div class="ac-msg" data-id="sarah"><div class="ac-msg-ind"></div><div class="ac-msg-body"><div class="ac-msg-top"><span class="ac-msg-name">Sarah Johnson</span><span class="ac-msg-date">Yesterday</span></div><div class="ac-msg-preview">Thank you 🙏</div></div></div>
+    <div class="ac-msg" data-id="patricia"><div class="ac-msg-ind"></div><div class="ac-msg-body"><div class="ac-msg-top"><span class="ac-msg-name">Patricia Davis</span><span class="ac-msg-date">Feb 14</span></div><div class="ac-msg-preview">That means so much. God bless you all.</div></div></div>
+  </div></div>
+  <div class="ac-convo">
+    <div class="ac-convo-hdr"><div><div class="ac-convo-name">Margaret Williams</div><div class="ac-convo-phone">910-555-0147</div></div><div class="ac-convo-sep"></div><div><div class="ac-convo-dec">Robert Williams</div><div class="ac-convo-ddate">d. 1/2/2026</div></div></div>
+    <div class="ac-msgs">
+      <div class="ac-sys">30-day Check-up</div>
+      <div class="ac-bubble out">Hello Margaret, this is Sonzini Mortuary and we wanted to thank you for allowing us to serve your family during this difficult time. If there is anything we can do for you, now or in the future, please let us know.<div class="ac-meta">Feb 3</div></div>
+      <div class="ac-sys">Holiday Message</div>
+      <div class="ac-bubble out">Wishing you a peaceful holiday season and a blessed new year. The staff at Sonzini Mortuary.<div class="ac-meta">Dec 10</div></div>
+      <div class="ac-sys">First Anniversary</div>
+      <div class="ac-bubble out">Please know that you are being remembered on this day and that all of us at Sonzini Mortuary are thinking of you.<div class="ac-meta">Feb 17</div></div>
+      <div class="ac-bubble in flagged">Thank you so much for remembering us. Could you tell me about grief counseling options you mentioned at the service?<div class="ac-meta" style="color:#8b8fa3;">Feb 18, 2:02 PM</div></div>
+      <div class="ac-flag">✦ Asking about grief counseling resources <span class="ac-flag-notif">· Notification sent to FH</span></div>
+    </div>
+    <div class="ac-reply" id="ac-reply-bar"><div class="ac-reply-wrap"><input placeholder=""/><div class="ac-reply-icons"><button class="ac-reply-ibtn" title="Emoji">😊</button><button class="ac-reply-ibtn" title="Attach image">🖼️</button></div></div><button class="ac-send-btn">Send</button></div>
+  </div>
+  <div class="ac-detail">
+    <div><h4>Message Schedule</h4>
+      <div class="ac-sched sent" data-msg="30day"><span class="ac-sched-check">✓</span><span class="ac-sched-name">30-day Check-up</span><span class="ac-sched-date">Feb 3</span></div>
+      <div class="ac-sched sent" data-msg="review"><span class="ac-sched-check">✓</span><span class="ac-sched-name">Google Review</span><span class="ac-sched-date">Feb 18</span></div>
+      <div class="ac-sched" data-msg="birthday"><span class="ac-sched-pend"></span><span class="ac-sched-name">Birthday</span><span class="ac-sched-date">Mar 15</span></div>
+      <div class="ac-sched" data-msg="holiday"><span class="ac-sched-pend"></span><span class="ac-sched-name">Holiday</span><span class="ac-sched-date">Dec 10</span></div>
+      <div class="ac-sched" data-msg="anniversary"><span class="ac-sched-pend"></span><span class="ac-sched-name">1st Anniversary</span><span class="ac-sched-date">Jan 2</span></div>
+    </div>
+    <div class="ac-stop-wrap" id="ac-stop-wrap"><div class="ac-stop" id="ac-stop-link">🚫 Stop future messages</div></div>
+  </div>
+</div>
+<div class="ac-modal-bg" id="ac-msg-modal"><div class="ac-modal"><div class="ac-modal-top"><div><div class="ac-modal-title" id="ac-modal-title"></div><div class="ac-modal-timing" id="ac-modal-timing"></div></div><button class="ac-modal-close" id="ac-modal-close-btn">✕</button></div><div class="ac-modal-msg" id="ac-modal-msg"></div><div class="ac-modal-foot"><button class="ac-modal-del" id="ac-modal-del">🗑 Delete message from schedule</button><button class="ac-modal-done" id="ac-modal-done-btn">Close</button></div></div></div>
+<div class="ac-modal-bg" id="ac-stop-modal"><div class="ac-confirm"><h3>Stop Messages for Margaret Williams?</h3><p>This will cancel all future scheduled text messages for this family and suppress their phone number from receiving any further texts.</p><div class="ac-confirm-warn">⚠️ This action cannot be undone.</div><p style="font-size:13px;">Remaining scheduled messages that will be cancelled:</p><div style="font-size:13px;color:#1a1a2e;margin-top:4px;padding-left:8px;"><div style="margin-bottom:3px;">• Birthday Message (Mar 15)</div><div style="margin-bottom:3px;">• Holiday Message (Dec 10)</div><div>• 1st Anniversary (Jan 2)</div></div><div class="ac-confirm-acts"><button class="ac-cancel-btn" id="ac-stop-cancel">Cancel</button><button class="ac-stop-btn" id="ac-stop-confirm">Stop All Messages</button></div></div></div>
+`;
+  }
+
+  function bindEvents(root) {
+    const msgData = {
+      '30day': { title: '30-day Check-up', timing: 'Sent 2/3/26 2:00 PM', sent: true, text: 'Hello Margaret, this is Sonzini Mortuary and we wanted to thank you for allowing us to serve your family during this difficult time. If there is anything we can do for you, now or in the future, please let us know.' },
+      'review': { title: 'Google Review', timing: 'Sent 2/18/26 2:00 PM', sent: true, text: 'Hi Margaret, all of us at Sonzini Mortuary are dedicated to providing excellent service to our families. One way we measure how we are doing is by asking our families to answer a few short questions about our service. Would you mind doing that? It would only take a few minutes. Thank you!' },
+      'birthday': { title: 'Birthday Message', timing: 'Scheduled for Mar 15', sent: false, text: 'Hi Margaret, we understand how meaningful and yet difficult the birthday of your loved one can be, so please know we are thinking about you today.\n\nThe staff at Sonzini Mortuary' },
+      'holiday': { title: 'Holiday Message', timing: 'Scheduled for Dec 10', sent: false, text: 'Wishing you a peaceful holiday season and a blessed new year.\n\nThe staff at Sonzini Mortuary' },
+      'anniversary': { title: 'First Anniversary', timing: 'Scheduled for Jan 2', sent: false, text: 'Please know that you are being remembered on this day and that all of us at Sonzini Mortuary are thinking of you.' }
+    };
+
+    root.querySelectorAll('.ac-sched').forEach(item => {
+      item.addEventListener('click', () => {
+        const d = msgData[item.dataset.msg]; if (!d) return;
+        root.querySelector('#ac-modal-title').textContent = d.title;
+        root.querySelector('#ac-modal-timing').textContent = d.timing;
+        root.querySelector('#ac-modal-msg').textContent = d.text;
+        root.querySelector('#ac-modal-del').style.display = d.sent ? 'none' : 'inline-block';
+        root.querySelector('#ac-msg-modal').classList.add('visible');
+      });
+    });
+
+    root.querySelector('#ac-modal-close-btn').addEventListener('click', () => root.querySelector('#ac-msg-modal').classList.remove('visible'));
+    root.querySelector('#ac-modal-done-btn').addEventListener('click', () => root.querySelector('#ac-msg-modal').classList.remove('visible'));
+    root.querySelector('#ac-msg-modal').addEventListener('click', e => { if (e.target.id === 'ac-msg-modal') root.querySelector('#ac-msg-modal').classList.remove('visible'); });
+
+    root.querySelector('#ac-stop-link').addEventListener('click', () => root.querySelector('#ac-stop-modal').classList.add('visible'));
+    root.querySelector('#ac-stop-cancel').addEventListener('click', () => root.querySelector('#ac-stop-modal').classList.remove('visible'));
+    root.querySelector('#ac-stop-modal').addEventListener('click', e => { if (e.target.id === 'ac-stop-modal') root.querySelector('#ac-stop-modal').classList.remove('visible'); });
+
+    root.querySelector('#ac-stop-confirm').addEventListener('click', () => {
+      root.querySelector('#ac-stop-modal').classList.remove('visible');
+      const bar = root.querySelector('#ac-reply-bar');
+      bar.className = 'ac-reply suppressed';
+      bar.innerHTML = '<div class="ac-suppressed"><span class="ac-suppressed-icon">🚫</span><div>This family no longer wants to receive messages. Their number has been suppressed and all future messages have been cancelled.</div></div>';
+      root.querySelector('#ac-stop-wrap').style.display = 'none';
+      root.querySelectorAll('.ac-sched:not(.sent)').forEach(i => { i.style.opacity='0.35'; i.style.textDecoration='line-through'; i.style.pointerEvents='none'; });
+    });
+
+    root.querySelectorAll('.ac-dismiss').forEach(link => {
+      link.addEventListener('click', e => {
+        e.stopPropagation();
+        const msg = link.closest('.ac-msg');
+        if (msg) { msg.style.transition='opacity 0.3s'; msg.style.opacity='0'; setTimeout(() => msg.remove(), 300); }
+      });
+    });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+
+  const obs = new MutationObserver(() => {
+    const root = document.getElementById('aftercare-text-root');
+    if (root && !root.dataset.aftercareInit) init();
+  });
+  obs.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
+</body>
+</html>

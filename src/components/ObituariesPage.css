@@ -1,0 +1,208 @@
+.obit-page {
+  padding: 20px 24px;
+}
+
+.obit-search-bar {
+  position: relative;
+  margin-bottom: 16px;
+}
+
+.obit-search-input {
+  width: 100%;
+  padding: 10px 40px 10px 16px;
+  border: 1px solid #dde1e8;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  background: #fff;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.obit-search-input:focus {
+  border-color: #3b82f6;
+}
+
+.obit-search-icon {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.obit-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.obit-count {
+  font-size: 13px;
+  color: #5a5d72;
+}
+
+.obit-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.obit-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #5a5d72;
+  cursor: pointer;
+}
+
+.toggle-track {
+  width: 36px;
+  height: 20px;
+  background: #dde1e8;
+  border-radius: 10px;
+  position: relative;
+  display: inline-block;
+}
+
+.toggle-knob {
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+
+.obit-dot-red {
+  color: #e74c3c;
+  font-size: 14px;
+}
+
+.obit-location-select {
+  padding: 8px 32px 8px 12px;
+  border: 1px solid #dde1e8;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  background: #fff;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%235a5d72' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+
+.obit-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.obit-card {
+  background: #fff;
+  border: 1px solid #e2e6ec;
+  border-radius: 10px;
+  padding: 20px 16px 12px;
+  text-align: center;
+  position: relative;
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+
+.obit-card:hover {
+  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+}
+
+.obit-card-dot {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  color: #e74c3c;
+  font-size: 10px;
+}
+
+.obit-card-pin {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  color: #f59e0b;
+  font-size: 16px;
+}
+
+.obit-card-pin.unpinned {
+  color: #ccc;
+}
+
+.obit-card-photo {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  margin: 0 auto 10px;
+  overflow: hidden;
+  background: #e2e6ec;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.obit-card-initials {
+  font-size: 20px;
+  font-weight: 600;
+  color: #8b8fa3;
+}
+
+.obit-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a2e;
+  margin-bottom: 2px;
+}
+
+.obit-card-date {
+  font-size: 12px;
+  color: #8b8fa3;
+  margin-bottom: 6px;
+}
+
+.obit-card-status {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+
+.obit-card-status.published {
+  color: #22c55e;
+  background: #f0fdf4;
+}
+
+.obit-card-status.draft {
+  color: #eab308;
+  background: #fefce8;
+}
+
+.obit-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 10px;
+  border-top: 1px solid #f0f2f5;
+}
+
+.obit-card-location {
+  font-size: 11px;
+  color: #8b8fa3;
+}
+
+.obit-card-actions {
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+  opacity: 0.5;
+}
