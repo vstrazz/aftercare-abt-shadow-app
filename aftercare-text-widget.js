@@ -208,9 +208,18 @@
 
     var shadow = hostEl.attachShadow({ mode: 'open' });
 
+    var fontHref = 'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap';
+
+    if (!document.querySelector('link[href*="DM+Sans"]')) {
+      var docFont = document.createElement('link');
+      docFont.rel = 'stylesheet';
+      docFont.href = fontHref;
+      document.head.appendChild(docFont);
+    }
+
     var fontLink = document.createElement('link');
     fontLink.rel = 'stylesheet';
-    fontLink.href = 'https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap';
+    fontLink.href = fontHref;
     shadow.appendChild(fontLink);
 
     var styleEl = document.createElement('style');
@@ -529,8 +538,13 @@
       return new Date(a.send_date || a.sendDate) - new Date(b.send_date || b.sendDate);
     });
 
+    root._scheduleItems = {};
+
     var html = '';
     items.forEach(function (item) {
+      var itemId = String(item.id || '');
+      root._scheduleItems[itemId] = item;
+
       var label = item.description || item.desc || '';
       var rawDate = item.send_date || item.sendDate || '';
       var dateStr = '';
@@ -546,7 +560,7 @@
         : '<span class="ac-sched-pend"></span>';
       var cls = isSent ? ' sent' : '';
 
-      html += '<div class="ac-sched' + cls + '" data-id="' + escapeAttr(String(item.id || '')) + '">' +
+      html += '<div class="ac-sched' + cls + '" data-id="' + escapeAttr(itemId) + '">' +
         icon +
         '<span class="ac-sched-name">' + escapeHtml(label) + '</span>' +
         '<span class="ac-sched-date">' + escapeHtml(dateStr) + '</span>' +
@@ -554,6 +568,40 @@
     });
 
     listEl.innerHTML = html;
+    bindScheduleClicks(root);
+  }
+
+  function bindScheduleClicks(root) {
+    root.querySelectorAll('#ac-schedule-list .ac-sched').forEach(function (el) {
+      el.addEventListener('click', function () {
+        var id = el.dataset.id;
+        var item = root._scheduleItems && root._scheduleItems[id];
+        if (!item) return;
+
+        var isSent = !!item.sent;
+        var label = item.description || item.desc || '';
+        var rawDate = item.send_date || item.sendDate || '';
+        var dateStr = '';
+        if (rawDate) {
+          var d = new Date(rawDate);
+          if (!isNaN(d.getTime())) {
+            dateStr = d.toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+          }
+        }
+        var timing = isSent ? 'Sent ' + dateStr : 'Scheduled for ' + dateStr;
+        var message = item.message || item.text_message || item.textMessage || item.body || '';
+
+        root.querySelector('#ac-modal-title').textContent = label;
+        root.querySelector('#ac-modal-timing').textContent = timing;
+        root.querySelector('#ac-modal-msg').textContent = message;
+
+        var delBtn = root.querySelector('#ac-modal-del');
+        delBtn.style.display = isSent ? 'none' : 'inline-block';
+        delBtn.dataset.scheduleId = id;
+
+        root.querySelector('#ac-msg-modal').classList.add('visible');
+      });
+    });
   }
 
   function sendMessage(root) {
@@ -914,33 +962,6 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
   // EVENT BINDING
   // ============================================================
   function bindEvents(root) {
-    const msgData = {
-      '30day': { title: '30-day Check-up', timing: 'Sent 2/3/26 2:00 PM', sent: true,
-        text: 'Hello Margaret, this is Sonzini Mortuary and we wanted to thank you for allowing us to serve your family during this difficult time. If there is anything we can do for you, now or in the future, please let us know.' },
-      'review': { title: 'Google Review', timing: 'Sent 2/18/26 2:00 PM', sent: true,
-        text: 'Hi Margaret, all of us at Sonzini Mortuary are dedicated to providing excellent service to our families. One way we measure how we are doing is by asking our families to answer a few short questions about our service. Would you mind doing that? It would only take a few minutes. Thank you!' },
-      'birthday': { title: 'Birthday Message', timing: 'Scheduled for Mar 15', sent: false,
-        text: 'Hi Margaret, we understand how meaningful and yet difficult the birthday of your loved one can be, so please know we are thinking about you today.\n\nThe staff at Sonzini Mortuary' },
-      'holiday': { title: 'Holiday Message', timing: 'Scheduled for Dec 10', sent: false,
-        text: 'Wishing you a peaceful holiday season and a blessed new year.\n\nThe staff at Sonzini Mortuary' },
-      'anniversary': { title: 'First Anniversary', timing: 'Scheduled for Jan 2', sent: false,
-        text: 'Please know that you are being remembered on this day and that all of us at Sonzini Mortuary are thinking of you.' }
-    };
-
-    // Schedule item clicks → open preview modal
-    root.querySelectorAll('.ac-sched').forEach(item => {
-      item.addEventListener('click', () => {
-        const id = item.dataset.msg;
-        const d = msgData[id];
-        if (!d) return;
-        root.querySelector('#ac-modal-title').textContent = d.title;
-        root.querySelector('#ac-modal-timing').textContent = d.timing;
-        root.querySelector('#ac-modal-msg').textContent = d.text;
-        root.querySelector('#ac-modal-del').style.display = d.sent ? 'none' : 'inline-block';
-        root.querySelector('#ac-msg-modal').classList.add('visible');
-      });
-    });
-
     // Close message modal
     root.querySelector('#ac-modal-close-btn').addEventListener('click', () => {
       root.querySelector('#ac-msg-modal').classList.remove('visible');
@@ -952,6 +973,41 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
       if (e.target === root.querySelector('#ac-msg-modal')) {
         root.querySelector('#ac-msg-modal').classList.remove('visible');
       }
+    });
+
+    // Delete scheduled message
+    root.querySelector('#ac-modal-del').addEventListener('click', function () {
+      var delBtn = root.querySelector('#ac-modal-del');
+      var schedId = delBtn.dataset.scheduleId;
+      if (!schedId) return;
+
+      var config = getConfig(root);
+      delBtn.disabled = true;
+      delBtn.textContent = 'Deleting…';
+
+      apiPost(config.apiBase, 'aftercare-families/schedule/' + encodeURIComponent(schedId) + '/delete')
+        .then(function () {
+          root.querySelector('#ac-msg-modal').classList.remove('visible');
+          delBtn.disabled = false;
+          delBtn.innerHTML = '🗑 Delete message from schedule';
+
+          var schedEl = root.querySelector('.ac-sched[data-id="' + schedId + '"]');
+          if (schedEl) {
+            schedEl.style.transition = 'opacity 0.3s';
+            schedEl.style.opacity = '0';
+            setTimeout(function () { schedEl.remove(); }, 300);
+          }
+        })
+        .catch(function () {
+          delBtn.disabled = false;
+          delBtn.innerHTML = '🗑 Delete message from schedule';
+          delBtn.style.borderColor = '#e74c3c';
+          delBtn.style.color = '#e74c3c';
+          setTimeout(function () {
+            delBtn.style.borderColor = '';
+            delBtn.style.color = '';
+          }, 2000);
+        });
     });
 
     // Stop link → open confirm

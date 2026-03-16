@@ -5,5 +5,5 @@ import { layoutRoute } from '../_layout'
 export const layoutIndexRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/',
-  component: () => <Navigate to="/obituaries" />,
+  component: () => <Navigate to="/aftercare-text" />,
 })

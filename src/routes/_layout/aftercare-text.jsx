@@ -7,7 +7,7 @@ function AftercareTextPage() {
   if (typeof window !== 'undefined') {
     window.AFTERCARE_CONFIG = {
       apiBase: import.meta.env.VITE_API_BASE_URL || '',
-      accountId: '2715',
+      accountId: '1',
     }
   }
   return (
