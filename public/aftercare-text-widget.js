@@ -1,13 +1,13 @@
 /**
- * Aftercare Text Widget
+ * Aftercare Text Widget V1.1.4
  * =====================
  * Self-contained script that renders the Aftercare Text inbox
  * inside a Shadow DOM root on any host page.
  *
  * USAGE:
- *   1. Host page includes a div with id="aftercare-text-root"
- *      Optional: data-api-base="https://your-api.com/api" data-account-id="2715"
- *   2. Or set window.AFTERCARE_CONFIG = { apiBase: '...', accountId: 2715 } before loading the script
+ *   1. Host page includes a div with id="aftercare-text-root" data-account-api-key="..."
+ *      (account_api_key is the tukios_api_key stored on the accounts table)
+ *   2. Or set window.AFTERCARE_CONFIG = { account_api_key: '...' } before loading the script
  *   3. Host page loads this script: <script src="aftercare-text-widget.js" defer></script>
  *   4. The script attaches a Shadow DOM to the host div and renders the
  *      full inbox UI (conversation list, thread view, schedule panel)
@@ -16,12 +16,26 @@
  * OPTIONAL:
  *   - If the host page has an element with id="aftercare-text-nav-badge",
  *     the script will update it with the current attention count.
+ *   - Set data-api-key on #aftercare-text-root (or window.AFTERCARE_CONFIG.apiKey)
+ *     to match API_CLIENT_KEYS on the API when key enforcement is enabled.
  */
 (function () {
   'use strict';
 
   const DEFAULT_API_BASE = 'https://aftercare-app-api-staging-be5961c463a6.herokuapp.com/api';
-  const DEFAULT_ACCOUNT_ID = '1';
+  // Global API client key (matches API_CLIENT_KEYS on the API). Sent as
+  // X-API-Key on every request to satisfy the global requireApiKey gate.
+  // Hosts can override via data-api-key or AFTERCARE_CONFIG.apiKey.
+  const DEFAULT_API_KEY = 'iYqk0m7sfswRkGoLSMoYNC054ZDYg80g';
+  // account_api_key refers to the tukios_api_key stored on the accounts table.
+  const DEFAULT_ACCOUNT_API_KEY = '1';
+  // All widget calls go through the per-account auth wrapper mounted at
+  // /api/widget/* on the API. The underlying handlers (text-messages,
+  // aftercare-families) are re-mounted there with widgetAuth, which
+  // resolves the bearer key to an account.id and injects it into the
+  // request before the public handlers run. The original public routes
+  // (e.g. /api/text-messages/*) remain unchanged for other consumers.
+  const WIDGET_PATH_PREFIX = 'widget';
 
   var _activeStream = null;
   var _activeStreamRecipientId = null;
@@ -32,10 +46,16 @@
     var config = getConfig(root);
     if (!config.apiBase) return;
 
-    var url = config.apiBase.replace(/\/$/, '') + '/text-messages/stream/' + encodeURIComponent(recipientId) + '?account_id=' + encodeURIComponent(config.accountId);
+    var streamBase = config.apiBase.replace(/\/$/, '') + '/' + WIDGET_PATH_PREFIX + '/text-messages/stream/' + encodeURIComponent(recipientId);
+    var streamUrl = new URL(streamBase);
+    // EventSource does not support custom request headers, so for the SSE stream we have to
+    // pass account_api_key as a query parameter instead of an Authorization: Bearer header.
+    // account_api_key is the tukios_api_key stored on the accounts table.
+    streamUrl.searchParams.set('account_api_key', String(config.account_api_key));
+    if (config.apiKey) streamUrl.searchParams.set('api_key', config.apiKey);
     var es;
     try {
-      es = new EventSource(url);
+      es = new EventSource(streamUrl.toString());
     } catch (e) {
       return;
     }
@@ -87,16 +107,6 @@
       return;
     }
 
-    if (msgType === 'outgoing_campaign') {
-      var desc = msg.description || msg.outgoing_message_type || msg.outgoingMessageType || '';
-      if (desc) {
-        var sys = document.createElement('div');
-        sys.className = 'ac-sys';
-        sys.textContent = desc;
-        msgsEl.appendChild(sys);
-      }
-    }
-
     var dir = (msgType === 'outgoing' || msgType === 'outgoing_campaign') ? 'out' : 'in';
     var body = msg.text_message != null ? msg.text_message : (msg.textMessage != null ? msg.textMessage : (msg.body != null ? msg.body : ''));
     var rawDate = msg.entry_date || msg.entryDate || msg.createdAt || '';
@@ -145,19 +155,29 @@
     const globalConfig = typeof window !== 'undefined' && window.AFTERCARE_CONFIG;
     return {
       apiBase: (hostEl && hostEl.dataset && hostEl.dataset.apiBase) || (globalConfig && globalConfig.apiBase) || DEFAULT_API_BASE,
-      accountId: (hostEl && hostEl.dataset && hostEl.dataset.accountId) || (globalConfig && globalConfig.accountId) || DEFAULT_ACCOUNT_ID,
+      // account_api_key refers to the tukios_api_key stored on the accounts table.
+      account_api_key: (hostEl && hostEl.dataset && hostEl.dataset.accountApiKey) || (globalConfig && globalConfig.account_api_key) || DEFAULT_ACCOUNT_API_KEY,
+      apiKey: (hostEl && hostEl.dataset && hostEl.dataset.apiKey) || (globalConfig && (globalConfig.apiKey || globalConfig.api_key)) || DEFAULT_API_KEY,
     };
   }
 
-  function apiGet(apiBase, path, params) {
-    if (!apiBase) return Promise.reject(new Error('API base URL not configured'));
-    var base = apiBase.replace(/\/$/, '');
+  function jsonHeaders(config) {
+    var h = { 'Content-Type': 'application/json' };
+    if (config && config.apiKey) h['X-API-Key'] = config.apiKey;
+    // account_api_key is the tukios_api_key stored on the accounts table.
+    if (config && config.account_api_key) h['Authorization'] = 'Bearer ' + config.account_api_key;
+    return h;
+  }
+
+  function apiGet(config, path, params) {
+    if (!config || !config.apiBase) return Promise.reject(new Error('API base URL not configured'));
+    var base = config.apiBase.replace(/\/$/, '');
     var search = new URLSearchParams(params || {});
     var pathPart = path.replace(/^\//, '');
     var url = pathPart.indexOf('?') !== -1
       ? base + '/' + pathPart + '&' + search.toString()
       : base + '/' + pathPart + (search.toString() ? '?' + search.toString() : '');
-    return fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json' } })
+    return fetch(url, { method: 'GET', headers: jsonHeaders(config) })
       .then(function (res) {
         if (!res.ok) throw new Error(res.statusText || 'Request failed');
         const ct = res.headers.get('content-type');
@@ -165,15 +185,50 @@
       });
   }
 
-  function apiPost(apiBase, path, body) {
-    if (!apiBase) return Promise.reject(new Error('API base URL not configured'));
-    var base = apiBase.replace(/\/$/, '');
+  function apiDelete(config, path, params) {
+    if (!config || !config.apiBase) return Promise.reject(new Error('API base URL not configured'));
+    var base = config.apiBase.replace(/\/$/, '');
+    var pathPart = path.replace(/^\//, '');
+    var search = new URLSearchParams(params || {});
+    var qs = search.toString();
+    var url = base + '/' + pathPart + (qs ? '?' + qs : '');
+    return fetch(url, { method: 'DELETE', headers: jsonHeaders(config) })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.statusText || 'Request failed');
+        var ct = res.headers.get('content-type');
+        return ct && ct.indexOf('application/json') !== -1 ? res.json() : res.text();
+      });
+  }
+
+  function apiPost(config, path, body) {
+    if (!config || !config.apiBase) return Promise.reject(new Error('API base URL not configured'));
+    var base = config.apiBase.replace(/\/$/, '');
     var pathPart = path.replace(/^\//, '');
     var url = base + '/' + pathPart;
     return fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonHeaders(config),
       body: JSON.stringify(body || {}),
+    }).then(function (res) {
+      if (!res.ok) throw new Error(res.statusText || 'Request failed');
+      var ct = res.headers.get('content-type');
+      return ct && ct.indexOf('application/json') !== -1 ? res.json() : res.text();
+    });
+  }
+
+  function apiPostFormData(config, path, formData) {
+    if (!config || !config.apiBase) return Promise.reject(new Error('API base URL not configured'));
+    var base = config.apiBase.replace(/\/$/, '');
+    var pathPart = path.replace(/^\//, '');
+    var url = base + '/' + pathPart;
+    // Omit Content-Type so the browser sets multipart/form-data with the correct boundary.
+    var headers = {};
+    if (config.apiKey) headers['X-API-Key'] = config.apiKey;
+    if (config.account_api_key) headers['Authorization'] = 'Bearer ' + config.account_api_key;
+    return fetch(url, {
+      method: 'POST',
+      headers: headers,
+      body: formData,
     }).then(function (res) {
       if (!res.ok) throw new Error(res.statusText || 'Request failed');
       var ct = res.headers.get('content-type');
@@ -232,8 +287,135 @@
     root._hostEl = hostEl;
     shadow.appendChild(root);
 
-    bindEvents(root);
-    loadConversationList(root);
+    bindProductGate(root, function () {
+      var textUi = root.querySelector('#ac-text-ui');
+      if (textUi) {
+        textUi.style.display = 'flex';
+      }
+      bindEvents(root);
+      loadConversationList(root);
+    });
+  }
+
+  /**
+   * POST /api/tukios-auth/product returns { success, product: 'ACP' | 'ABT' | 'Dual' }.
+   * Older servers may return { success, products: ['ACP', 'ABT'] } instead.
+   */
+  function isAcpCardsOnlyProductResponse(data) {
+    if (!data || !data.success) return false;
+    var p = data.product;
+    if (typeof p === 'string' && p.trim().toUpperCase() === 'ACP') {
+      return true;
+    }
+    var list = data.products;
+    if (!Array.isArray(list) || list.length === 0) return false;
+    var norm = list.map(function (x) {
+      return String(x || '').trim().toUpperCase();
+    });
+    return norm.indexOf('ABT') === -1 && norm.indexOf('ACP') !== -1;
+  }
+
+  /**
+   * Same POST /api/tukios-auth + redirect as top-bar / ACP-only buttons.
+   */
+  function wireAftercareAdminButton(root, selector, defaultLabel) {
+    var btn = root.querySelector(selector);
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var config = getConfig(root);
+      if (!config.apiBase || !config.account_api_key) {
+        btn.textContent = 'Configure API + account key';
+        setTimeout(function () {
+          btn.textContent = defaultLabel;
+        }, 2500);
+        return;
+      }
+
+      var label = defaultLabel;
+      btn.disabled = true;
+      btn.textContent = 'Signing in…';
+
+      apiPost(config, 'tukios-auth', {
+        tukios_api_key: String(config.account_api_key),
+      })
+        .then(function (data) {
+          var url = data && data.loginUrl;
+          if (url && typeof url === 'string') {
+            window.location.assign(url);
+            return;
+          }
+          btn.disabled = false;
+          btn.textContent = 'Sign-in unavailable';
+          setTimeout(function () {
+            btn.textContent = label;
+          }, 2500);
+        })
+        .catch(function () {
+          btn.disabled = false;
+          btn.textContent = 'Sign-in failed — try again';
+          setTimeout(function () {
+            btn.textContent = label;
+          }, 2500);
+        });
+    });
+  }
+
+  function bindProductGate(root, onFullUi) {
+    var gate = root.querySelector('#ac-product-gate');
+    var loading = root.querySelector('#ac-gate-loading');
+    var acpOnly = root.querySelector('#ac-gate-acp-only');
+    var textUi = root.querySelector('#ac-text-ui');
+    var config = getConfig(root);
+
+    if (!config.apiBase || !config.account_api_key) {
+      if (gate) gate.style.display = 'none';
+      if (textUi) textUi.style.display = 'flex';
+      onFullUi();
+      return;
+    }
+
+    apiPost(config, 'tukios-auth/product', {
+      tukios_api_key: String(config.account_api_key),
+    })
+      .then(function (data) {
+        if (loading) loading.style.display = 'none';
+        if (isAcpCardsOnlyProductResponse(data)) {
+          if (acpOnly) acpOnly.style.display = 'block';
+          wireAftercareAdminButton(root, '#ac-gate-login-btn', 'Open Aftercare.com');
+          return;
+        }
+        if (gate) gate.style.display = 'none';
+        if (textUi) textUi.style.display = 'flex';
+        onFullUi();
+      })
+      .catch(function () {
+        if (loading) loading.style.display = 'none';
+        if (gate) gate.style.display = 'none';
+        if (textUi) textUi.style.display = 'flex';
+        onFullUi();
+      });
+  }
+
+  /** Clear thread header and show an idle state when no conversation is selected (e.g. empty list). */
+  function resetConvoPanelForNoSelection(root) {
+    var hdr = root.querySelector('.ac-convo-hdr');
+    if (hdr) {
+      var nameEl = hdr.querySelector('.ac-convo-name');
+      var phoneEl = hdr.querySelector('.ac-convo-phone');
+      var decEl = hdr.querySelector('.ac-convo-dec');
+      var ddateEl = hdr.querySelector('.ac-convo-ddate');
+      var sep = hdr.querySelector('.ac-convo-sep');
+      if (nameEl) nameEl.textContent = '';
+      if (phoneEl) phoneEl.textContent = '';
+      if (decEl) decEl.textContent = '';
+      if (ddateEl) ddateEl.textContent = '';
+      if (sep) sep.style.display = 'none';
+      if (decEl) decEl.parentElement.style.display = 'none';
+    }
+    var msgsEl = root.querySelector('.ac-msgs');
+    if (msgsEl) {
+      msgsEl.innerHTML = '<div class="ac-sys">No conversation to display.</div>';
+    }
   }
 
   function loadConversationList(root) {
@@ -243,18 +425,31 @@
 
     listEl.innerHTML = '<div class="ac-list-loading" style="padding:24px;text-align:center;color:#8b8fa3;font-size:14px;">Loading conversations…</div>';
 
-    var accountId = config.accountId;
-    var params = { account_id: accountId, limit: 50, offset: 0, days_back: 100000};
-    var count_params = { account_id: accountId, days_back: 100000};
+    // account_api_key (the tukios_api_key stored on the accounts table) is sent via the
+    // Authorization: Bearer <account_api_key> header by jsonHeaders(config), not as a query param.
+    var params = { limit: 50, offset: 0, days_back: 100000 };
+    var count_params = { days_back: 100000 };
 
     Promise.all([
-      apiGet(config.apiBase, 'text-messages/conversations', params).catch(function () { return { conversations: [] }; }),
-      apiGet(config.apiBase, 'text-messages/unread-count', count_params).catch(function () { return { count: 0 }; }),
+      apiGet(config, WIDGET_PATH_PREFIX + '/text-messages/conversations', params).catch(function () { return { conversations: [] }; }),
+      apiGet(config, WIDGET_PATH_PREFIX + '/text-messages/unread-count', count_params).catch(function () { return { count: 0 }; }),
     ]).then(function (results) {
       var raw = results[0];
       var conversations = (raw.data != null) ? raw.data : ((raw.conversations != null) ? raw.conversations : (Array.isArray(raw) ? raw : []));
       var rawCount = results[1];
-      var unreadCount = typeof rawCount === 'number' ? rawCount : (rawCount.count != null ? rawCount.count : (rawCount.unreadCount != null ? rawCount.unreadCount : 0));
+      var unreadCount = 0;
+      if (typeof rawCount === 'number') {
+        unreadCount = rawCount;
+      } else if (typeof rawCount === 'string' && !isNaN(parseInt(rawCount, 10))) {
+        unreadCount = parseInt(rawCount, 10);
+      } else if (rawCount != null && typeof rawCount === 'object') {
+        var inner = rawCount.data != null ? rawCount.data : rawCount;
+        unreadCount = inner.total_unread != null ? inner.total_unread
+          : inner.count != null ? inner.count
+          : inner.unreadCount != null ? inner.unreadCount
+          : typeof inner === 'number' ? inner
+          : 0;
+      }
       renderConversationList(root, listEl, conversations, unreadCount);
       updateNavBadge(unreadCount);
       bindListEvents(root);
@@ -262,9 +457,12 @@
       if (firstActive) {
         var rid = firstActive.dataset.recipientId || firstActive.dataset.id;
         if (rid) loadThread(root, rid);
+      } else {
+        resetConvoPanelForNoSelection(root);
       }
     }).catch(function () {
       listEl.innerHTML = '<div class="ac-list-loading" style="padding:24px;text-align:center;color:#8b8fa3;font-size:14px;">Unable to load conversations. Check data-api-base and network.</div>';
+      resetConvoPanelForNoSelection(root);
     });
   }
 
@@ -364,26 +562,50 @@
   function markReadByRecipient(root, recipientId, dismissLink) {
     var config = getConfig(root);
     if (!config.apiBase) {
-      removeMessageRow(dismissLink);
+      removeMessageRow(root, dismissLink);
       return;
     }
-    fetch((config.apiBase.replace(/\/$/, '')) + '/mark-read', {
+    var recipientIdNum = parseInt(recipientId, 10);
+    if (isNaN(recipientIdNum)) {
+      removeMessageRow(root, dismissLink);
+      return;
+    }
+    fetch((config.apiBase.replace(/\/$/, '')) + '/' + WIDGET_PATH_PREFIX + '/text-messages/mark-read', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipientId: recipientId }),
+      headers: jsonHeaders(config),
+      body: JSON.stringify({ recipient_id: recipientIdNum }),
     }).then(function (res) {
-      if (res.ok) removeMessageRow(dismissLink);
+      if (res.ok) removeMessageRow(root, dismissLink);
     }).catch(function () {
-      removeMessageRow(dismissLink);
+      removeMessageRow(root, dismissLink);
     });
   }
-  function removeMessageRow(dismissLink) {
+  function removeMessageRow(root, dismissLink) {
     var msg = dismissLink && dismissLink.closest('.ac-msg');
-    if (msg) {
-      msg.style.transition = 'opacity 0.3s';
-      msg.style.opacity = '0';
-      setTimeout(function () { msg.remove(); }, 300);
+    if (!msg) return;
+
+    msg.style.transition = 'opacity 0.3s';
+    msg.style.opacity = '0';
+    setTimeout(function () {
+      msg.remove();
+      updateAttentionCount(root);
+    }, 300);
+  }
+
+  function updateAttentionCount(root) {
+    var remaining = root.querySelectorAll('.ac-dismiss').length;
+    var countEl = root.querySelector('.ac-group-count');
+    var hdrEl = root.querySelector('.ac-group-hdr');
+    var divider = root.querySelector('.ac-divider');
+
+    if (remaining > 0) {
+      if (countEl) countEl.textContent = remaining;
+    } else {
+      if (hdrEl) hdrEl.remove();
+      if (divider) divider.remove();
     }
+
+    updateNavBadge(remaining);
   }
 
   function loadThread(root, recipientId) {
@@ -395,7 +617,7 @@
       msgsEl.innerHTML = '<div class="ac-sys">Loading messages…</div>';
     }
 
-    apiGet(config.apiBase, 'text-messages/thread/' + encodeURIComponent(recipientId), { order: 'asc' })
+    apiGet(config, WIDGET_PATH_PREFIX + '/text-messages/thread/' + encodeURIComponent(recipientId), { order: 'asc' })
       .then(function (data) {
         renderThread(root, data, recipientId);
         connectStream(root, recipientId);
@@ -453,12 +675,6 @@
         html += '<div class="ac-flag">✦ ' + escapeHtml(msg.text_message || msg.textMessage || '') + '</div>';
         return;
       }
-      if (msgType === 'outgoing_campaign') {
-        var desc = msg.description || msg.outgoing_message_type || msg.outgoingMessageType || '';
-        if (desc) {
-          html += '<div class="ac-sys">' + escapeHtml(desc) + '</div>';
-        }
-      }
       var dir = (msgType === 'outgoing' || msgType === 'outgoing_campaign') ? 'out' : 'in';
       var body = msg.text_message != null ? msg.text_message : (msg.textMessage != null ? msg.textMessage : (msg.body != null ? msg.body : ''));
       var rawDate = msg.entry_date || msg.entryDate || msg.createdAt || '';
@@ -507,7 +723,7 @@
       listEl.innerHTML = '<div style="font-size:12px;color:#8b8fa3;padding:8px 0;">Loading schedule…</div>';
     }
 
-    apiGet(config.apiBase, 'aftercare-families/' + encodeURIComponent(familyId) + '/schedule', { type: 'text' })
+    apiGet(config, WIDGET_PATH_PREFIX + '/aftercare-families/' + encodeURIComponent(familyId) + '/schedule', { type: 'text' })
       .then(function (res) {
         var items = res.data || res || [];
         if (recipientId) {
@@ -551,7 +767,7 @@
       if (rawDate) {
         var d = new Date(rawDate);
         if (!isNaN(d.getTime())) {
-          dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+          dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: 'UTC' });
         }
       }
       var isSent = !!item.sent;
@@ -585,7 +801,7 @@
         if (rawDate) {
           var d = new Date(rawDate);
           if (!isNaN(d.getTime())) {
-            dateStr = d.toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+            dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
           }
         }
         var timing = isSent ? 'Sent ' + dateStr : 'Scheduled for ' + dateStr;
@@ -604,6 +820,17 @@
     });
   }
 
+  function clearStagedImage(root) {
+    var chip = root.querySelector('#ac-img-chip');
+    var thumb = root.querySelector('#ac-img-thumb');
+    var label = root.querySelector('#ac-img-chip-label');
+    var fileInput = root.querySelector('#ac-img-file');
+    if (chip) chip.style.display = 'none';
+    if (thumb) { thumb.src = ''; thumb.dataset.s3Url = ''; }
+    if (label) label.textContent = '';
+    if (fileInput) fileInput.value = '';
+  }
+
   function sendMessage(root) {
     var config = getConfig(root);
     if (!config.apiBase) return;
@@ -612,7 +839,10 @@
     if (!input) return;
 
     var message = input.value.trim();
-    if (!message) return;
+    var thumb = root.querySelector('#ac-img-thumb');
+    var imageUrl = (thumb && thumb.dataset.s3Url) || '';
+
+    if (!message && !imageUrl) return;
 
     var recipientId = input.dataset.recipientId;
     if (!recipientId) return;
@@ -629,14 +859,31 @@
       var meta = now.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
       var bubble = document.createElement('div');
       bubble.className = 'ac-bubble out';
-      bubble.innerHTML = escapeHtml(message) + '<div class="ac-meta">' + escapeHtml(meta) + '</div>';
+      if (imageUrl) {
+        var previewImg = document.createElement('img');
+        previewImg.src = imageUrl;
+        previewImg.style.cssText = 'max-width:180px;max-height:180px;border-radius:8px;display:block;margin-bottom:4px;';
+        bubble.appendChild(previewImg);
+      }
+      if (message) {
+        var textNode = document.createTextNode(message);
+        bubble.appendChild(textNode);
+      }
+      var metaDiv = document.createElement('div');
+      metaDiv.className = 'ac-meta';
+      metaDiv.textContent = meta;
+      bubble.appendChild(metaDiv);
       msgsEl.appendChild(bubble);
       msgsEl.scrollTop = msgsEl.scrollHeight;
     }
 
     input.value = '';
+    clearStagedImage(root);
 
-    apiPost(config.apiBase, 'text-messages/thread/' + encodeURIComponent(recipientId), { message: message })
+    var body = { message: message };
+    if (imageUrl) body.image = imageUrl;
+
+    apiPost(config, WIDGET_PATH_PREFIX + '/text-messages/thread/' + encodeURIComponent(recipientId), body)
       .then(function () {
         if (sendBtn) {
           sendBtn.disabled = false;
@@ -663,12 +910,7 @@
   function updateNavBadge(count) {
     const badge = document.getElementById('aftercare-text-nav-badge');
     if (badge) {
-      if (count > 0) {
-        badge.textContent = count;
-        badge.style.display = 'inline-block';
-      } else {
-        badge.style.display = 'none';
-      }
+      badge.textContent = count > 0 ? count : '';
     }
   }
 
@@ -682,11 +924,27 @@
 ${S} { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif; display: flex; flex-direction: column; height: 100%; color: #1a1a2e; }
 ${S} * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* Scrollbar reset – prevent host-page ::-webkit-scrollbar styles from leaking in */
+${S} *::-webkit-scrollbar { width: 6px; height: 6px; }
+${S} *::-webkit-scrollbar-track { background: transparent; }
+${S} *::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 3px; }
+${S} *::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.25); }
+${S} * { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.15) transparent; }
+
 /* Top bar */
 ${S} .ac-topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; background: #fff; border-bottom: 1px solid #e2e6ec; flex-shrink: 0; }
 ${S} .ac-topbar-left { font-size: 18px; font-weight: 700; color: #1a1a2e; }
-${S} .ac-topbar-settings { font-size: 13px; font-weight: 500; color: #4a6cf7; text-decoration: none; padding: 7px 14px; border: 1px solid #dde1e8; border-radius: 6px; transition: all 0.15s; }
-${S} .ac-topbar-settings:hover { border-color: #4a6cf7; background: #f0f3ff; }
+${S} .ac-topbar-settings { font-family: inherit; font-size: 13px; font-weight: 500; color: #4a6cf7; cursor: pointer; padding: 7px 14px; border: 1px solid #dde1e8; border-radius: 6px; background: #fff; transition: all 0.15s; }
+${S} .ac-topbar-settings:hover:not(:disabled) { border-color: #4a6cf7; background: #f0f3ff; }
+${S} .ac-topbar-settings:disabled { opacity: 0.65; cursor: not-allowed; }
+
+/* Product gate (ACP-only accounts: no text inbox) */
+${S} .ac-product-gate { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 24px; background: #fff; min-height: 180px; }
+${S} .ac-gate-loading { font-size: 15px; color: #8b8fa3; }
+${S} .ac-gate-acp-only { text-align: center; max-width: 380px; transform: translateY(-300px); }
+${S} .ac-gate-copy { font-size: 15px; line-height: 1.55; color: #1a1a2e; margin-bottom: 20px; }
+${S} .ac-acp-login-btn { font-family: inherit; }
+${S} .ac-text-ui { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 
 /* Inbox layout */
 ${S} .ac-inbox { display: flex; flex: 1; overflow: hidden; }
@@ -730,11 +988,18 @@ ${S} .ac-flag { font-size: 12px; color: #92400e; font-weight: 500; padding: 4px 
 ${S} .ac-flag-notif { color: #b0956a; font-weight: 400; }
 
 /* Reply bar */
-${S} .ac-reply { padding: 16px 24px; background: #fff; border-top: 1px solid #e2e6ec; display: flex; gap: 12px; align-items: center; }
-${S} .ac-reply-wrap { flex: 1; position: relative; display: flex; align-items: center; }
-${S} .ac-reply-wrap input { width: 100%; padding: 10px 70px 10px 14px; border: 1px solid #dde1e8; border-radius: 8px; font-size: 14px; font-family: inherit; background: #f8f9fb; outline: none; }
-${S} .ac-reply-wrap input:focus { border-color: #4a6cf7; }
+${S} .ac-reply { padding: 16px 24px; background: #fff; border-top: 1px solid #e2e6ec; display: flex; gap: 12px; align-items: flex-end; }
+${S} .ac-reply-wrap { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+${S} .ac-reply-input-row { position: relative; display: flex; align-items: center; }
+${S} .ac-reply-input-row input[type=text] { width: 100%; padding: 10px 70px 10px 14px; border: 1px solid #dde1e8; border-radius: 8px; font-size: 14px; font-family: inherit; background: #f8f9fb; outline: none; }
+${S} .ac-reply-input-row input[type=text]:focus { border-color: #4a6cf7; }
 ${S} .ac-reply-icons { position: absolute; right: 8px; display: flex; gap: 2px; }
+${S} .ac-img-chip { display: flex; align-items: center; gap: 8px; background: #f0f3ff; border: 1px solid #c5d0fb; border-radius: 8px; padding: 6px 10px; }
+${S} .ac-img-thumb { height: 40px; width: 40px; object-fit: cover; border-radius: 4px; border: 1px solid #dde1e8; }
+${S} .ac-img-chip-label { font-size: 12px; color: #4a6cf7; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+${S} .ac-img-chip-rm { background: none; border: none; cursor: pointer; color: #5a5d72; font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 4px; font-family: inherit; }
+${S} .ac-img-chip-rm:hover { background: #e0e5ff; color: #e74c3c; }
+${S} .ac-img-uploading { font-size: 12px; color: #8b8fa3; padding: 4px 0; }
 ${S} .ac-reply-ibtn { width: 30px; height: 30px; border: none; background: transparent; cursor: pointer; font-size: 16px; border-radius: 6px; display: flex; align-items: center; justify-content: center; opacity: 0.4; transition: opacity 0.15s; }
 ${S} .ac-reply-ibtn:hover { opacity: 0.8; }
 ${S} .ac-send-btn { padding: 10px 20px; background: #4a6cf7; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
@@ -799,10 +1064,18 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
   // ============================================================
   function getHTML() {
     return `
+<div id="ac-product-gate" class="ac-product-gate">
+  <div id="ac-gate-loading" class="ac-gate-loading">Loading…</div>
+  <div id="ac-gate-acp-only" class="ac-gate-acp-only" style="display:none">
+    <p class="ac-gate-copy">Click below to open Aftercare.com.</p>
+    <button type="button" class="ac-acp-login-btn ac-topbar-settings" id="ac-gate-login-btn">Open Aftercare.com</button>
+  </div>
+</div>
+<div id="ac-text-ui" class="ac-text-ui" style="display:none">
 <!-- Aftercare top bar -->
 <div class="ac-topbar">
   <div class="ac-topbar-left">Aftercare Text</div>
-  <a class="ac-topbar-settings" href="https://www.aftercare.com/system" target="_blank">⚙️ Aftercare Text Settings ↗</a>
+  <button type="button" class="ac-topbar-settings" id="ac-open-admin-btn">Open Aftercare.com</button>
 </div>
 
 <!-- Inbox -->
@@ -810,50 +1083,7 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
   <!-- Message list -->
   <div class="ac-list">
     <div class="ac-list-msgs">
-      <div class="ac-group-hdr">Needs Attention <span class="ac-group-count">2</span></div>
-      <div class="ac-msg active" data-id="margaret">
-        <div class="ac-msg-ind"><span class="ac-sparkle">✦</span></div>
-        <div class="ac-msg-body">
-          <div class="ac-msg-top">
-            <span class="ac-msg-name">Margaret Williams</span>
-            <span class="ac-msg-date">2:02 PM</span>
-          </div>
-          <div class="ac-msg-preview">Thank you so much for remembering us. Could you tell me about grief coun...</div>
-          <div class="ac-dismiss" data-resolve="margaret">Mark resolved</div>
-        </div>
-      </div>
-      <div class="ac-msg" data-id="david">
-        <div class="ac-msg-ind"><span class="ac-sparkle">✦</span></div>
-        <div class="ac-msg-body">
-          <div class="ac-msg-top">
-            <span class="ac-msg-name">David Chen</span>
-            <span class="ac-msg-date">11:30 AM</span>
-          </div>
-          <div class="ac-msg-preview">I appreciate that.. but what day are we remembering</div>
-          <div class="ac-dismiss" data-resolve="david">Mark resolved</div>
-        </div>
-      </div>
-      <div class="ac-divider"></div>
-      <div class="ac-msg" data-id="sarah">
-        <div class="ac-msg-ind"></div>
-        <div class="ac-msg-body">
-          <div class="ac-msg-top">
-            <span class="ac-msg-name">Sarah Johnson</span>
-            <span class="ac-msg-date">Yesterday</span>
-          </div>
-          <div class="ac-msg-preview">Thank you 🙏</div>
-        </div>
-      </div>
-      <div class="ac-msg" data-id="patricia">
-        <div class="ac-msg-ind"></div>
-        <div class="ac-msg-body">
-          <div class="ac-msg-top">
-            <span class="ac-msg-name">Patricia Davis</span>
-            <span class="ac-msg-date">Feb 14</span>
-          </div>
-          <div class="ac-msg-preview">That means so much. God bless you all.</div>
-        </div>
-      </div>
+      <div class="ac-list-loading" style="padding:24px;text-align:center;color:#8b8fa3;font-size:14px;">Loading conversations…</div>
     </div>
   </div>
 
@@ -861,47 +1091,34 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
   <div class="ac-convo">
     <div class="ac-convo-hdr">
       <div>
-        <div class="ac-convo-name">Margaret Williams</div>
-        <div class="ac-convo-phone">910-555-0147</div>
+        <div class="ac-convo-name"></div>
+        <div class="ac-convo-phone"></div>
       </div>
-      <div class="ac-convo-sep"></div>
-      <div>
-        <div class="ac-convo-dec">Robert Williams</div>
-        <div class="ac-convo-ddate">d. 1/2/2026</div>
+      <div class="ac-convo-sep" style="display:none"></div>
+      <div style="display:none">
+        <div class="ac-convo-dec"></div>
+        <div class="ac-convo-ddate"></div>
       </div>
     </div>
     <div class="ac-msgs">
-      <div class="ac-sys">30-day Check-up</div>
-      <div class="ac-bubble out">
-        Hello Margaret, this is Sonzini Mortuary and we wanted to thank you for allowing us to serve your family during this difficult time. If there is anything we can do for you, now or in the future, please let us know.
-        <div class="ac-meta">Feb 3</div>
-      </div>
-      <div class="ac-sys">Holiday Message</div>
-      <div class="ac-bubble out">
-        Wishing you a peaceful holiday season and a blessed new year. The staff at Sonzini Mortuary.
-        <div class="ac-meta">Dec 10</div>
-      </div>
-      <div class="ac-sys">First Anniversary</div>
-      <div class="ac-bubble out">
-        Please know that you are being remembered on this day and that all of us at Sonzini Mortuary are thinking of you.
-        <div class="ac-meta">Feb 17</div>
-      </div>
-      <div class="ac-bubble in flagged">
-        Thank you so much for remembering us. Could you tell me about grief counseling options you mentioned at the service?
-        <div class="ac-meta" style="color:#8b8fa3;">Feb 18, 2:02 PM</div>
-      </div>
-      <div class="ac-flag">
-        ✦ Asking about grief counseling resources <span class="ac-flag-notif">· Notification sent to FH</span>
-      </div>
+      <div class="ac-sys">Loading messages…</div>
     </div>
     <div class="ac-reply" id="ac-reply-bar">
       <div class="ac-reply-wrap">
-        <input class="message-input" name="message" type="text" placeholder="" />
-        <div class="ac-reply-icons">
-          <button class="ac-reply-ibtn ac-emoji-btn" title="Emoji">😊</button>
-          <button class="ac-reply-ibtn" title="Attach image">🖼️</button>
+        <div class="ac-img-chip" id="ac-img-chip" style="display:none">
+          <img class="ac-img-thumb" id="ac-img-thumb" src="" alt="attachment" />
+          <span class="ac-img-chip-label" id="ac-img-chip-label"></span>
+          <button type="button" class="ac-img-chip-rm" id="ac-img-chip-rm" title="Remove image">✕</button>
         </div>
-        <div class="ac-emoji-panel" id="ac-emoji-panel"></div>
+        <div class="ac-reply-input-row">
+          <input class="message-input" name="message" type="text" placeholder="" />
+          <input type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif" id="ac-img-file" style="display:none" />
+          <div class="ac-reply-icons">
+            <button type="button" class="ac-reply-ibtn ac-emoji-btn" title="Emoji">😊</button>
+            <button type="button" class="ac-reply-ibtn ac-img-btn" title="Attach image">🖼️</button>
+          </div>
+          <div class="ac-emoji-panel" id="ac-emoji-panel"></div>
+        </div>
       </div>
       <button class="ac-send-btn">Send</button>
     </div>
@@ -940,20 +1157,16 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
 <!-- Stop Confirm Modal -->
 <div class="ac-modal-bg" id="ac-stop-modal">
   <div class="ac-confirm">
-    <h3>Stop Messages for Margaret Williams?</h3>
+    <h3>Stop all scheduled messages?</h3>
     <p>This will cancel all future scheduled text messages for this family and suppress their phone number from receiving any further texts.</p>
     <div class="ac-confirm-warn">⚠️ This action cannot be undone.</div>
-    <p style="font-size:13px;">Remaining scheduled messages that will be cancelled:</p>
-    <div style="font-size:13px; color:#1a1a2e; margin-top:4px; padding-left:8px;">
-      <div style="margin-bottom:3px;">• Birthday Message (Mar 15)</div>
-      <div style="margin-bottom:3px;">• Holiday Message (Dec 10)</div>
-      <div>• 1st Anniversary (Jan 2)</div>
-    </div>
+    <p style="font-size:13px;">All remaining scheduled messages for this recipient will be cancelled.</p>
     <div class="ac-confirm-acts">
       <button class="ac-cancel-btn" id="ac-stop-cancel">Cancel</button>
       <button class="ac-stop-btn" id="ac-stop-confirm">Stop All Messages</button>
     </div>
   </div>
+</div>
 </div>
 `;
   }
@@ -962,7 +1175,7 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
   // EVENT BINDING
   // ============================================================
   function bindEvents(root) {
-    // Close message modal
+    wireAftercareAdminButton(root, '#ac-open-admin-btn', 'Open Aftercare.com');
     root.querySelector('#ac-modal-close-btn').addEventListener('click', () => {
       root.querySelector('#ac-msg-modal').classList.remove('visible');
     });
@@ -985,7 +1198,9 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
       delBtn.disabled = true;
       delBtn.textContent = 'Deleting…';
 
-      apiPost(config.apiBase, 'aftercare-families/schedule/' + encodeURIComponent(schedId) + '/delete')
+      // account_api_key (the tukios_api_key stored on the accounts table) is sent via the
+      // Authorization: Bearer <account_api_key> header by jsonHeaders(config), not as a query param.
+      apiDelete(config, WIDGET_PATH_PREFIX + '/aftercare-families/schedule/' + encodeURIComponent(schedId), { type: 'text' })
         .then(function () {
           root.querySelector('#ac-msg-modal').classList.remove('visible');
           delBtn.disabled = false;
@@ -1041,7 +1256,7 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
       confirmBtn.textContent = 'Stopping…';
       cancelBtn.disabled = true;
 
-      apiPost(config.apiBase, 'stop/' + encodeURIComponent(recipientId))
+      apiPost(config, WIDGET_PATH_PREFIX + '/text-messages/stop/' + encodeURIComponent(recipientId))
         .then(function () {
           root.querySelector('#ac-stop-modal').classList.remove('visible');
           confirmBtn.disabled = false;
@@ -1132,6 +1347,61 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
       });
     }
 
+    // Image upload
+    var imgBtn = root.querySelector('.ac-img-btn');
+    var imgFileInput = root.querySelector('#ac-img-file');
+    var imgChip = root.querySelector('#ac-img-chip');
+    var imgThumb = root.querySelector('#ac-img-thumb');
+    var imgChipLabel = root.querySelector('#ac-img-chip-label');
+    var imgChipRm = root.querySelector('#ac-img-chip-rm');
+
+    if (imgBtn && imgFileInput) {
+      imgBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        imgFileInput.click();
+      });
+
+      imgFileInput.addEventListener('change', function () {
+        var file = imgFileInput.files && imgFileInput.files[0];
+        if (!file) return;
+
+        // Show a local object-URL preview immediately while uploading
+        var localUrl = URL.createObjectURL(file);
+        if (imgThumb) { imgThumb.src = localUrl; imgThumb.dataset.s3Url = ''; }
+        if (imgChipLabel) imgChipLabel.textContent = 'Uploading…';
+        if (imgChip) imgChip.style.display = 'flex';
+        if (imgBtn) imgBtn.disabled = true;
+
+        var config = getConfig(root);
+        var formData = new FormData();
+        formData.append('file', file);
+
+        apiPostFormData(config, WIDGET_PATH_PREFIX + '/text-messages/upload-image', formData)
+          .then(function (data) {
+            var s3Url = data && data.url;
+            if (!s3Url) throw new Error('No URL in response');
+            if (imgThumb) imgThumb.dataset.s3Url = s3Url;
+            if (imgChipLabel) imgChipLabel.textContent = file.name;
+            if (imgBtn) imgBtn.disabled = false;
+          })
+          .catch(function () {
+            // Upload failed — clear the chip and show a brief error on the button
+            clearStagedImage(root);
+            if (imgBtn) {
+              imgBtn.disabled = false;
+              imgBtn.title = 'Upload failed — try again';
+              setTimeout(function () { imgBtn.title = 'Attach image'; }, 3000);
+            }
+          });
+      });
+    }
+
+    if (imgChipRm) {
+      imgChipRm.addEventListener('click', function () {
+        clearStagedImage(root);
+      });
+    }
+
     // Send message
     var sendBtn = root.querySelector('.ac-send-btn');
     if (sendBtn) {
@@ -1149,19 +1419,6 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
       });
     }
 
-    // Dismiss / Mark resolved
-    root.querySelectorAll('.ac-dismiss').forEach(link => {
-      link.addEventListener('click', (e) => {
-        e.stopPropagation();
-        // In production this would call the API. For demo, just remove the item.
-        const msg = link.closest('.ac-msg');
-        if (msg) {
-          msg.style.transition = 'opacity 0.3s';
-          msg.style.opacity = '0';
-          setTimeout(() => msg.remove(), 300);
-        }
-      });
-    });
   }
 
   // ============================================================

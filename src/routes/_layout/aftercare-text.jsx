@@ -7,7 +7,9 @@ function AftercareTextPage() {
   if (typeof window !== 'undefined') {
     window.AFTERCARE_CONFIG = {
       apiBase: import.meta.env.VITE_API_BASE_URL || '',
-      accountId: '1',
+      // account_api_key refers to the tukios_api_key stored on the accounts table.
+      account_api_key: '9da68d93fb8e02f5a782fa895cde318e',
+      apiKey: import.meta.env.VITE_API_KEY || '',
     }
   }
   return (

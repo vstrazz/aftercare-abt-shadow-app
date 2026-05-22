@@ -17,8 +17,10 @@ const getBaseUrl = () => {
 export async function apiRequest(path, options = {}) {
   const base = getBaseUrl()
   const url = path.startsWith('http') ? path : `${base}/${path.replace(/^\//, '')}`
+  const apiKey = import.meta.env.VITE_API_KEY
   const headers = {
     'Content-Type': 'application/json',
+    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     ...options.headers,
   }
   const res = await fetch(url, { ...options, headers })

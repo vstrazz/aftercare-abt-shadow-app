@@ -7,7 +7,7 @@
     "dev": "npm run sync-widget && vite",
     "build": "npm run sync-widget && vite build",
     "preview": "vite preview",
-    "sync-widget": "cp aftercare-text-widget.js public/aftercare-text-widget.js"
+    "sync-widget": "cp aftercare-text-widget.js public/aftercare-text-widget.js && cp aftercare-badge-poll.js public/aftercare-badge-poll.js && npx terser aftercare-text-widget.js -o aftercare-text-widget.min.js --compress --mangle --comments \"/Aftercare Text Widget/\" && npx terser aftercare-badge-poll.js -o aftercare-badge-poll.min.js --compress --mangle --comments \"/Aftercare Badge Poll/\" && cp aftercare-text-widget.min.js public/aftercare-text-widget.min.js && cp aftercare-badge-poll.min.js public/aftercare-badge-poll.min.js"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.21",
@@ -17,6 +17,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.0",
+    "terser": "^5.46.1",
     "vite": "^5.0.0"
   }
 }
