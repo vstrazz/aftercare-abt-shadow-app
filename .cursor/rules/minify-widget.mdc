@@ -1,0 +1,16 @@
+---
+description: After editing standalone widget scripts, sync public copies, minify, and rebuild dist via npm
+globs: aftercare-text-widget.js,aftercare-badge-poll.js
+alwaysApply: false
+---
+
+# Widget sync + minify + dist
+
+Standalone scripts (`aftercare-text-widget.js`, `aftercare-badge-poll.js`) live at the shadow-app repo root. After any edit, from `aftercare-abt-shadow-app/`:
+
+```bash
+npm run sync-widget    # copies to public/*.js, writes root + public *.min.js (terser)
+npm run build          # runs sync-widget then vite build — public assets land in dist/
+```
+
+Do not run terser by hand unless debugging; use `npm run sync-widget` so minified outputs stay aligned with source.
