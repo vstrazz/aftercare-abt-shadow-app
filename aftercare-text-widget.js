@@ -92,6 +92,136 @@
     _activeStreamRecipientId = null;
   }
 
+  function extractMessageTimestamp(msg) {
+    if (!msg) return '';
+    return msg.entry_date
+      || msg.entryDate
+      || msg.createdAt
+      || msg.created_at
+      || msg.sentAt
+      || msg.send_date
+      || msg.sendDate
+      || msg.at
+      || msg.date
+      || msg.timestamp
+      || '';
+  }
+
+  function formatMessageMeta(rawDate) {
+    if (!rawDate) return '';
+    var s = typeof rawDate === 'string' ? rawDate.trim() : '';
+    var rawParts = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
+    if (rawParts) {
+      // Preserve API clock time exactly as supplied (no timezone conversion).
+      var asCalendarClock = new Date(Date.UTC(
+        parseInt(rawParts[1], 10),
+        parseInt(rawParts[2], 10) - 1,
+        parseInt(rawParts[3], 10),
+        parseInt(rawParts[4], 10),
+        parseInt(rawParts[5], 10)
+      ));
+      return asCalendarClock.toLocaleString([], {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZone: 'UTC',
+      });
+    }
+    var d = new Date(rawDate);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  function formatCalendarDate(raw) {
+    if (!raw) return '';
+    var s = typeof raw === 'string' ? raw.trim() : '';
+    // Date-only values should be rendered as-is to avoid timezone day shifts.
+    var m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/);
+    if (m) {
+      return parseInt(m[2], 10) + '/' + parseInt(m[3], 10) + '/' + parseInt(m[1], 10);
+    }
+    var d = new Date(raw);
+    if (isNaN(d.getTime())) return '';
+    return (d.getUTCMonth() + 1) + '/' + d.getUTCDate() + '/' + d.getUTCFullYear();
+  }
+
+  function extractMessageReaction(msg) {
+    if (!msg) return '';
+    return msg.reaction != null
+      ? msg.reaction
+      : (msg.message_reaction != null ? msg.message_reaction : (msg.messageReaction != null ? msg.messageReaction : ''));
+  }
+
+  function extractMessageId(msg) {
+    if (!msg) return '';
+    var id = msg.id != null ? msg.id : (msg.message_id != null ? msg.message_id : msg.messageId);
+    return id != null ? String(id) : '';
+  }
+
+  function hasReactionField(msg) {
+    if (!msg) return false;
+    return Object.prototype.hasOwnProperty.call(msg, 'reaction')
+      || Object.prototype.hasOwnProperty.call(msg, 'message_reaction')
+      || Object.prototype.hasOwnProperty.call(msg, 'messageReaction');
+  }
+
+  function extractMessageImage(msg) {
+    if (!msg) return '';
+    return msg.image != null
+      ? msg.image
+      : (msg.media_url != null ? msg.media_url : (msg.mediaUrl != null ? msg.mediaUrl : ''));
+  }
+
+  function hasImageField(msg) {
+    if (!msg) return false;
+    return Object.prototype.hasOwnProperty.call(msg, 'image')
+      || Object.prototype.hasOwnProperty.call(msg, 'media_url')
+      || Object.prototype.hasOwnProperty.call(msg, 'mediaUrl');
+  }
+
+  function setBubbleContent(bubble, body, meta, image, reaction) {
+    var imgHtml = image
+      ? '<div style="margin-top:8px;"><img src="' + escapeAttr(image) + '" style="max-width:200px;border-radius:8px;" /></div>'
+      : '';
+    var reactionHtml = reaction ? '<div class="ac-reaction-badge">' + escapeHtml(reaction) + '</div>' : '';
+    bubble.innerHTML = reactionHtml + escapeHtml(body) + imgHtml + '<div class="ac-meta">' + escapeHtml(meta) + '</div>';
+    bubble.dataset.messageBody = body;
+    bubble.dataset.messageMeta = meta;
+    bubble.dataset.messageImage = image;
+    bubble.dataset.messageReaction = reaction;
+  }
+
+  function isUnchangedStreamUpdate(bubble, body, meta, image, reaction, flagged) {
+    if (!bubble) return false;
+    var sameBody = (bubble.dataset.messageBody || '') === (body || '');
+    var sameMeta = (bubble.dataset.messageMeta || '') === (meta || '');
+    var sameImage = (bubble.dataset.messageImage || '') === (image || '');
+    var sameReaction = (bubble.dataset.messageReaction || '') === (reaction || '');
+    var sameFlagged = bubble.classList.contains('flagged') === !!flagged;
+    return sameBody && sameMeta && sameImage && sameReaction && sameFlagged;
+  }
+
+  function scrollMessagesToBottom(msgsEl) {
+    if (!msgsEl) return;
+
+    var doScroll = function () {
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+    };
+
+    // Immediate + follow-up passes to catch async layout.
+    doScroll();
+    requestAnimationFrame(doScroll);
+    setTimeout(doScroll, 80);
+
+    // Images load after HTML is inserted; keep the latest message pinned.
+    msgsEl.querySelectorAll('img').forEach(function (img) {
+      if (img.complete) return;
+      img.addEventListener('load', doScroll, { once: true });
+      img.addEventListener('error', doScroll, { once: true });
+    });
+  }
+
   function appendStreamMessage(root, msg, recipientId) {
     var msgsEl = root.querySelector('.ac-msgs');
     if (!msgsEl) return;
@@ -109,28 +239,59 @@
 
     var dir = (msgType === 'outgoing' || msgType === 'outgoing_campaign') ? 'out' : 'in';
     var body = msg.text_message != null ? msg.text_message : (msg.textMessage != null ? msg.textMessage : (msg.body != null ? msg.body : ''));
-    var rawDate = msg.entry_date || msg.entryDate || msg.createdAt || '';
-    var meta = '';
-    if (rawDate) {
-      var d = new Date(rawDate);
-      if (!isNaN(d.getTime())) {
-        meta = d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-      }
-    }
+    var rawDate = extractMessageTimestamp(msg);
+    var meta = formatMessageMeta(rawDate);
+    var messageId = extractMessageId(msg);
 
     var hasMod = msg.moderation && msg.moderation.length > 0;
     var flagged = (msgType === 'incoming' && !msg.moderated && !msg.admin_viewed && hasMod) ? ' flagged' : '';
 
-    var imgHtml = '';
-    if (msg.image) {
-      imgHtml = '<div style="margin-top:8px;"><img src="' + escapeAttr(msg.image) + '" style="max-width:200px;border-radius:8px;" /></div>';
+    var image = extractMessageImage(msg);
+
+    var existing = messageId ? msgsEl.querySelector('.ac-bubble[data-message-id="' + escapeAttr(messageId) + '"]') : null;
+    if (existing) {
+      var mergedBody = body || existing.dataset.messageBody || '';
+      var mergedMeta = meta || existing.dataset.messageMeta || '';
+      var mergedImage = hasImageField(msg)
+        ? (extractMessageImage(msg) || '')
+        : (existing.dataset.messageImage || '');
+      var mergedReaction = hasReactionField(msg)
+        ? extractMessageReaction(msg)
+        : (existing.dataset.messageReaction || '');
+      if (isUnchangedStreamUpdate(existing, mergedBody, mergedMeta, mergedImage, mergedReaction, flagged)) {
+        return;
+      }
+      setBubbleContent(existing, mergedBody, mergedMeta, mergedImage, mergedReaction);
+      if (flagged) existing.classList.add('flagged');
+      else existing.classList.remove('flagged');
+      scrollMessagesToBottom(msgsEl);
+      updateConversationPreview(root, recipientId, mergedBody, rawDate);
+      return;
     }
 
     var bubble = document.createElement('div');
     bubble.className = 'ac-bubble ' + dir + flagged;
-    bubble.innerHTML = escapeHtml(body) + imgHtml + '<div class="ac-meta">' + escapeHtml(meta) + '</div>';
-    msgsEl.appendChild(bubble);
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    if (messageId) {
+      bubble.dataset.messageId = messageId;
+    }
+    var optimistic = dir === 'out' ? msgsEl.querySelector('.ac-bubble.out[data-optimistic]') : null;
+    if (!meta && optimistic) {
+      var optimisticMeta = optimistic.querySelector('.ac-meta');
+      if (optimisticMeta && optimisticMeta.textContent) {
+        meta = optimisticMeta.textContent;
+      }
+    }
+    setBubbleContent(bubble, body, meta, image, extractMessageReaction(msg));
+
+    // If this is an outgoing message, check for an optimistic placeholder we added
+    // immediately in sendMessage. Replace it with the confirmed server message instead
+    // of appending a duplicate.
+    if (optimistic) {
+      msgsEl.replaceChild(bubble, optimistic);
+    } else {
+      msgsEl.appendChild(bubble);
+    }
+    scrollMessagesToBottom(msgsEl);
 
     updateConversationPreview(root, recipientId, body, rawDate);
   }
@@ -315,6 +476,27 @@
     return norm.indexOf('ABT') === -1 && norm.indexOf('ACP') !== -1;
   }
 
+  function extractLoginUrl(data) {
+    if (!data) return '';
+    if (typeof data === 'string') {
+      var raw = data.trim();
+      if (!raw) return '';
+      if (/^https?:\/\//i.test(raw)) return raw;
+      try {
+        var parsed = JSON.parse(raw);
+        return extractLoginUrl(parsed);
+      } catch (e) {
+        return '';
+      }
+    }
+    return data.loginUrl
+      || data.login_url
+      || data.url
+      || data.redirectUrl
+      || data.redirect_url
+      || '';
+  }
+
   /**
    * Same POST /api/tukios-auth + redirect as top-bar / ACP-only buttons.
    */
@@ -322,8 +504,19 @@
     var btn = root.querySelector(selector);
     if (!btn) return;
     btn.addEventListener('click', function () {
+      // Open a placeholder tab immediately so browsers don't block it after async auth.
+      var newWindow = window.open('about:blank', '_blank');
+      if (newWindow && !newWindow.closed) {
+        try {
+          newWindow.document.title = 'Aftercare login';
+          newWindow.document.body.innerHTML = '<div style="font-family:Arial,sans-serif;padding:24px;color:#1a1a2e;">Signing in to Aftercare…</div>';
+        } catch (e) {
+          // Ignore cross-origin/document access issues.
+        }
+      }
       var config = getConfig(root);
       if (!config.apiBase || !config.account_api_key) {
+        if (newWindow && !newWindow.closed) newWindow.close();
         btn.textContent = 'Configure API + account key';
         setTimeout(function () {
           btn.textContent = defaultLabel;
@@ -339,11 +532,29 @@
         tukios_api_key: String(config.account_api_key),
       })
         .then(function (data) {
-          var url = data && data.loginUrl;
+          var url = extractLoginUrl(data);
           if (url && typeof url === 'string') {
-            window.location.assign(url);
+            var didNavigate = false;
+            if (newWindow && !newWindow.closed) {
+              try {
+                newWindow.location.replace(url);
+                didNavigate = true;
+              } catch (e) {
+                didNavigate = false;
+              }
+            }
+            if (!didNavigate) {
+              var fallback = window.open(url, '_blank');
+              if (fallback) {
+                didNavigate = true;
+              }
+            }
+            if (!didNavigate) {
+              window.location.assign(url);
+            }
             return;
           }
+          if (newWindow && !newWindow.closed) newWindow.close();
           btn.disabled = false;
           btn.textContent = 'Sign-in unavailable';
           setTimeout(function () {
@@ -351,6 +562,7 @@
           }, 2500);
         })
         .catch(function () {
+          if (newWindow && !newWindow.closed) newWindow.close();
           btn.disabled = false;
           btn.textContent = 'Sign-in failed — try again';
           setTimeout(function () {
@@ -526,9 +738,38 @@
     if (s == null) return '';
     return String(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
+
+  function decodeHtmlEntities(s) {
+    if (s == null) return '';
+    var text = String(s);
+    if (text.indexOf('&') === -1) return text;
+    var textarea = document.createElement('textarea');
+    textarea.innerHTML = text;
+    return textarea.value;
+  }
+
+  function parseDisplayDate(raw) {
+    if (!raw) return new Date(NaN);
+    if (raw instanceof Date) return raw;
+    if (typeof raw !== 'string') return new Date(raw);
+    var s = raw.trim();
+    var m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+    if (m) {
+      return new Date(
+        parseInt(m[1], 10),
+        parseInt(m[2], 10) - 1,
+        parseInt(m[3], 10),
+        parseInt(m[4] || '0', 10),
+        parseInt(m[5] || '0', 10),
+        parseInt(m[6] || '0', 10)
+      );
+    }
+    return new Date(raw);
+  }
+
   function formatDate(raw) {
     if (!raw) return '';
-    var d = typeof raw === 'string' ? new Date(raw) : raw;
+    var d = parseDisplayDate(raw);
     if (isNaN(d.getTime())) return '';
     var now = new Date();
     var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -644,10 +885,8 @@
     var dateOd = family.date_od || family.dateOd || '';
     var dateOdStr = '';
     if (dateOd) {
-      var dd = new Date(dateOd);
-      if (!isNaN(dd.getTime())) {
-        dateOdStr = 'd. ' + (dd.getMonth() + 1) + '/' + dd.getDate() + '/' + dd.getFullYear();
-      }
+      var formattedDod = formatCalendarDate(dateOd);
+      if (formattedDod) dateOdStr = 'd. ' + formattedDod;
     }
 
     var hdr = root.querySelector('.ac-convo-hdr');
@@ -677,27 +916,29 @@
       }
       var dir = (msgType === 'outgoing' || msgType === 'outgoing_campaign') ? 'out' : 'in';
       var body = msg.text_message != null ? msg.text_message : (msg.textMessage != null ? msg.textMessage : (msg.body != null ? msg.body : ''));
-      var rawDate = msg.entry_date || msg.entryDate || msg.createdAt || '';
-      var meta = '';
-      if (rawDate) {
-        var d = new Date(rawDate);
-        if (!isNaN(d.getTime())) {
-          meta = d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-        }
-      }
+      var rawDate = extractMessageTimestamp(msg);
+      var meta = formatMessageMeta(rawDate);
 
       var hasMod = msg.moderation && msg.moderation.length > 0;
       var flagged = (msgType === 'incoming' && !msg.moderated && !msg.admin_viewed && hasMod) ? ' flagged' : '';
 
-      var imgHtml = '';
-      if (msg.image) {
-        imgHtml = '<div style="margin-top:8px;"><img src="' + escapeAttr(msg.image) + '" style="max-width:200px;border-radius:8px;" /></div>';
-      }
-
-      html += '<div class="ac-bubble ' + dir + flagged + '">' + escapeHtml(body) + imgHtml + '<div class="ac-meta">' + escapeHtml(meta) + '</div></div>';
+      var messageId = extractMessageId(msg);
+      var idAttr = messageId ? ' data-message-id="' + escapeAttr(messageId) + '"' : '';
+      var image = extractMessageImage(msg) || '';
+      var reaction = extractMessageReaction(msg);
+      var imgHtml = image
+        ? '<div style="margin-top:8px;"><img src="' + escapeAttr(image) + '" style="max-width:200px;border-radius:8px;" /></div>'
+        : '';
+      var reactionHtml = reaction ? '<div class="ac-reaction-badge">' + escapeHtml(reaction) + '</div>' : '';
+      html += '<div class="ac-bubble ' + dir + flagged + '"' + idAttr +
+        ' data-message-body="' + escapeAttr(body) + '"' +
+        ' data-message-meta="' + escapeAttr(meta) + '"' +
+        ' data-message-image="' + escapeAttr(image) + '"' +
+        ' data-message-reaction="' + escapeAttr(reaction) + '">' +
+        reactionHtml + escapeHtml(body) + imgHtml + '<div class="ac-meta">' + escapeHtml(meta) + '</div></div>';
     });
     msgsEl.innerHTML = html || '<div class="ac-sys">No messages in this thread.</div>';
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    scrollMessagesToBottom(msgsEl);
 
     var replyBar = root.querySelector('#ac-reply-bar');
     if (replyBar && !replyBar.classList.contains('suppressed')) {
@@ -809,7 +1050,7 @@
 
         root.querySelector('#ac-modal-title').textContent = label;
         root.querySelector('#ac-modal-timing').textContent = timing;
-        root.querySelector('#ac-modal-msg').textContent = message;
+        root.querySelector('#ac-modal-msg').textContent = decodeHtmlEntities(message);
 
         var delBtn = root.querySelector('#ac-modal-del');
         delBtn.style.display = isSent ? 'none' : 'inline-block';
@@ -856,9 +1097,10 @@
     var msgsEl = root.querySelector('.ac-msgs');
     if (msgsEl) {
       var now = new Date();
-      var meta = now.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      var meta = formatMessageMeta(now.toISOString());
       var bubble = document.createElement('div');
       bubble.className = 'ac-bubble out';
+      bubble.dataset.optimistic = 'true';
       if (imageUrl) {
         var previewImg = document.createElement('img');
         previewImg.src = imageUrl;
@@ -978,10 +1220,11 @@ ${S} .ac-convo-dec { font-size: 14px; font-weight: 500; color: #5a5d72; }
 ${S} .ac-convo-ddate { font-size: 12px; color: #8b8fa3; margin-top: 1px; }
 ${S} .ac-msgs { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
 ${S} .ac-sys { align-self: center; font-size: 11px; color: #8b8fa3; font-weight: 500; }
-${S} .ac-bubble { max-width: 75%; padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.5; }
+${S} .ac-bubble { max-width: 75%; padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.5; position: relative; overflow: visible; }
 ${S} .ac-bubble.out { align-self: flex-end; background: #4a6cf7; color: #fff; border-bottom-right-radius: 4px; }
 ${S} .ac-bubble.in { align-self: flex-start; background: #fff; color: #1a1a2e; border: 1px solid #e2e6ec; border-bottom-left-radius: 4px; }
 ${S} .ac-bubble.in.flagged { border-color: #f59e0b; border-width: 1.5px; box-shadow: 0 0 0 1px rgba(245,158,11,0.15); }
+${S} .ac-reaction-badge { position: absolute; top: -10px; left: -10px; min-width: 26px; height: 22px; padding: 0 7px; border-radius: 999px; background: #fff; border: 1px solid #dde1e8; box-shadow: 0 2px 6px rgba(0,0,0,0.12); display: inline-flex; align-items: center; justify-content: center; font-size: 13px; line-height: 1; }
 ${S} .ac-meta { font-size: 11px; opacity: 0.6; margin-top: 4px; }
 ${S} .ac-bubble.out .ac-meta { text-align: right; }
 ${S} .ac-flag { font-size: 12px; color: #92400e; font-weight: 500; padding: 4px 0; align-self: flex-start; }
