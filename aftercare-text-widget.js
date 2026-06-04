@@ -181,11 +181,13 @@
   }
 
   function setBubbleContent(bubble, body, meta, image, reaction) {
+    var mediaOnly = !body && !!image;
+    bubble.classList.toggle('media-only', mediaOnly);
     var imgHtml = image
-      ? '<div style="margin-top:8px;"><img src="' + escapeAttr(image) + '" style="max-width:200px;border-radius:8px;" /></div>'
+      ? '<div class="ac-image-wrap"><img class="ac-msg-image" src="' + escapeAttr(image) + '" /></div>'
       : '';
     var reactionHtml = reaction ? '<div class="ac-reaction-badge">' + escapeHtml(reaction) + '</div>' : '';
-    bubble.innerHTML = reactionHtml + escapeHtml(body) + imgHtml + '<div class="ac-meta">' + escapeHtml(meta) + '</div>';
+    bubble.innerHTML = reactionHtml + linkifyMessageText(body) + imgHtml + '<div class="ac-meta">' + escapeHtml(meta) + '</div>';
     bubble.dataset.messageBody = body;
     bubble.dataset.messageMeta = meta;
     bubble.dataset.messageImage = image;
@@ -200,6 +202,65 @@
     var sameReaction = (bubble.dataset.messageReaction || '') === (reaction || '');
     var sameFlagged = bubble.classList.contains('flagged') === !!flagged;
     return sameBody && sameMeta && sameImage && sameReaction && sameFlagged;
+  }
+
+  function conversationNeedsAttention(c) {
+    if (!c || typeof c !== 'object') return false;
+    var last = c.last_message || c.lastMessage || {};
+    var direct = c.needs_attention;
+    if (direct == null) direct = c.needsAttention;
+    if (direct == null) direct = c.recipient_needs_attention;
+    if (direct == null) direct = c.recipientNeedsAttention;
+    if (direct == null) direct = last.needs_attention;
+    if (direct == null) direct = last.needsAttention;
+    return direct === true || direct === 1 || direct === '1' || direct === 'true';
+  }
+
+  function threadRecipientNeedsAttention(inner, recipient) {
+    var source = inner && typeof inner === 'object' ? inner : {};
+    var rec = recipient && typeof recipient === 'object' ? recipient : {};
+    var direct = source.recipient_needs_attention;
+    if (direct == null) direct = source.recipientNeedsAttention;
+    if (direct == null) direct = source.needs_attention;
+    if (direct == null) direct = source.needsAttention;
+    if (direct == null) direct = rec.needs_attention;
+    if (direct == null) direct = rec.needsAttention;
+    if (direct == null) direct = rec.recipient_needs_attention;
+    if (direct == null) direct = rec.recipientNeedsAttention;
+    return direct === true || direct === 1 || direct === '1' || direct === 'true';
+  }
+
+  function messageNeedsAttention(msg) {
+    if (!msg || typeof msg !== 'object') return false;
+    var direct = msg.needs_attention;
+    if (direct == null) direct = msg.needsAttention;
+    if (direct === true || direct === 1 || direct === '1' || direct === 'true') return true;
+
+    var moderation = msg.moderation;
+    if (Array.isArray(moderation)) {
+      return moderation.some(function (entry) {
+        if (!entry || typeof entry !== 'object') return false;
+        return entry.needs_attention === true
+          || entry.needsAttention === true
+          || entry.needs_attention === 1
+          || entry.needsAttention === 1
+          || entry.needs_attention === '1'
+          || entry.needsAttention === '1'
+          || entry.needs_attention === 'true'
+          || entry.needsAttention === 'true';
+      });
+    }
+    if (moderation && typeof moderation === 'object') {
+      return moderation.needs_attention === true
+        || moderation.needsAttention === true
+        || moderation.needs_attention === 1
+        || moderation.needsAttention === 1
+        || moderation.needs_attention === '1'
+        || moderation.needsAttention === '1'
+        || moderation.needs_attention === 'true'
+        || moderation.needsAttention === 'true';
+    }
+    return false;
   }
 
   function scrollMessagesToBottom(msgsEl) {
@@ -219,6 +280,29 @@
       if (img.complete) return;
       img.addEventListener('load', doScroll, { once: true });
       img.addEventListener('error', doScroll, { once: true });
+    });
+  }
+
+  function ensureOnlyLastFlaggedMessage(msgsEl) {
+    if (!msgsEl) return;
+    var incoming = Array.from(msgsEl.querySelectorAll('.ac-bubble.in'));
+    if (!incoming.length) return;
+    var recipientNeedsAttention = msgsEl.dataset.recipientNeedsAttention === '1';
+    if (!recipientNeedsAttention) {
+      incoming.forEach(function (bubble) {
+        bubble.classList.remove('flagged');
+      });
+      return;
+    }
+
+    var attention = incoming.filter(function (bubble) {
+      return bubble.dataset.needsAttention === '1';
+    });
+    var lastAttention = attention.length ? attention[attention.length - 1] : null;
+
+    incoming.forEach(function (bubble) {
+      if (bubble === lastAttention) bubble.classList.add('flagged');
+      else bubble.classList.remove('flagged');
     });
   }
 
@@ -244,7 +328,12 @@
     var messageId = extractMessageId(msg);
 
     var hasMod = msg.moderation && msg.moderation.length > 0;
-    var flagged = (msgType === 'incoming' && !msg.moderated && !msg.admin_viewed && hasMod) ? ' flagged' : '';
+    var flaggedByStatus = messageNeedsAttention(msg);
+    var flaggedByLegacy = !msg.moderated && !msg.admin_viewed && hasMod;
+    var flagged = (msgType === 'incoming' && (flaggedByStatus || flaggedByLegacy)) ? ' flagged' : '';
+    if (flagged && dir === 'in') {
+      msgsEl.dataset.recipientNeedsAttention = '1';
+    }
 
     var image = extractMessageImage(msg);
 
@@ -262,8 +351,10 @@
         return;
       }
       setBubbleContent(existing, mergedBody, mergedMeta, mergedImage, mergedReaction);
+      existing.dataset.needsAttention = flagged ? '1' : '0';
       if (flagged) existing.classList.add('flagged');
       else existing.classList.remove('flagged');
+      ensureOnlyLastFlaggedMessage(msgsEl);
       scrollMessagesToBottom(msgsEl);
       updateConversationPreview(root, recipientId, mergedBody, rawDate);
       return;
@@ -271,10 +362,17 @@
 
     var bubble = document.createElement('div');
     bubble.className = 'ac-bubble ' + dir + flagged;
+    bubble.dataset.needsAttention = flagged ? '1' : '0';
     if (messageId) {
       bubble.dataset.messageId = messageId;
     }
     var optimistic = dir === 'out' ? msgsEl.querySelector('.ac-bubble.out[data-optimistic]') : null;
+    if (!body && optimistic && optimistic.dataset.messageBody) {
+      body = optimistic.dataset.messageBody;
+    }
+    if (!hasImageField(msg) && optimistic && optimistic.dataset.messageImage) {
+      image = optimistic.dataset.messageImage;
+    }
     if (!meta && optimistic) {
       var optimisticMeta = optimistic.querySelector('.ac-meta');
       if (optimisticMeta && optimisticMeta.textContent) {
@@ -291,9 +389,14 @@
     } else {
       msgsEl.appendChild(bubble);
     }
+    ensureOnlyLastFlaggedMessage(msgsEl);
     scrollMessagesToBottom(msgsEl);
 
     updateConversationPreview(root, recipientId, body, rawDate);
+    if (dir === 'in') {
+      markConversationNeedsAttention(root, recipientId);
+    }
+    rebuildConversationSections(root);
   }
 
   function updateConversationPreview(root, recipientId, text, rawDate) {
@@ -309,6 +412,109 @@
     if (dateEl && rawDate) {
       dateEl.textContent = formatDate(rawDate);
     }
+  }
+
+  function isCompactViewport() {
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    return window.matchMedia('(max-width: 820px)').matches;
+  }
+
+  function applyResponsiveLayout(root) {
+    if (!root) return;
+    var compact = isCompactViewport();
+    root.classList.toggle('ac-mobile', compact);
+    if (!compact) {
+      root.classList.remove('ac-mobile-list', 'ac-mobile-thread');
+      return;
+    }
+    var view = root.dataset.mobileView === 'thread' ? 'thread' : 'list';
+    root.classList.toggle('ac-mobile-list', view === 'list');
+    root.classList.toggle('ac-mobile-thread', view === 'thread');
+  }
+
+  function setMobileView(root, view) {
+    if (!root) return;
+    root.dataset.mobileView = view === 'thread' ? 'thread' : 'list';
+    applyResponsiveLayout(root);
+  }
+
+  function initResponsiveBehavior(root) {
+    applyResponsiveLayout(root);
+    if (root._onViewportChange) return;
+    root._onViewportChange = function () {
+      applyResponsiveLayout(root);
+    };
+    window.addEventListener('resize', root._onViewportChange);
+  }
+
+  function bindDismissLink(root, link) {
+    if (!link || link.dataset.boundDismiss === '1') return;
+    link.dataset.boundDismiss = '1';
+    link.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var id = link.dataset.resolve;
+      if (!id) return;
+      openClearAttentionConfirm(root, id, link);
+    });
+  }
+
+  function rebuildConversationSections(root) {
+    var listEl = root.querySelector('.ac-list-msgs');
+    if (!listEl) return;
+
+    var rows = Array.from(listEl.querySelectorAll('.ac-msg'));
+    if (!rows.length) return;
+
+    var attentionRows = rows.filter(function (row) {
+      return row.dataset.needsAttention === '1';
+    });
+    updateNavBadge(attentionRows.length);
+    bindListEvents(root);
+  }
+
+  function markConversationNeedsAttention(root, recipientId) {
+    var item = root.querySelector('.ac-msg[data-recipient-id="' + recipientId + '"]')
+      || root.querySelector('.ac-msg[data-id="' + recipientId + '"]');
+    if (!item) return;
+
+    var msgInd = item.querySelector('.ac-msg-ind');
+    if (msgInd) {
+      msgInd.innerHTML = '<span class="ac-alert-dot" aria-hidden="true"></span>';
+    }
+    item.dataset.needsAttention = '1';
+
+    var body = item.querySelector('.ac-msg-body');
+    if (!body) return;
+    var attentionRow = body.querySelector('.ac-attention-row');
+    if (!attentionRow) {
+      attentionRow = document.createElement('div');
+      attentionRow.className = 'ac-attention-row';
+      attentionRow.innerHTML = '<span class="ac-attention-label">AI Flagged</span><div class="ac-dismiss" data-resolve="' + escapeAttr(String(recipientId)) + '">Clear</div>';
+      body.appendChild(attentionRow);
+    }
+  }
+
+  function openClearAttentionConfirm(root, recipientId, dismissLink) {
+    var modal = root.querySelector('#ac-clear-attn-modal');
+    var confirmBtn = root.querySelector('#ac-clear-attn-confirm');
+    if (!modal || !confirmBtn) return;
+    confirmBtn.dataset.recipientId = String(recipientId || '');
+    root._clearAttentionDismissLink = dismissLink || null;
+    modal.classList.add('visible');
+  }
+
+  function closeClearAttentionConfirm(root) {
+    var modal = root.querySelector('#ac-clear-attn-modal');
+    var confirmBtn = root.querySelector('#ac-clear-attn-confirm');
+    if (confirmBtn) {
+      confirmBtn.dataset.recipientId = '';
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Yes, resolve';
+    }
+    var cancelBtn = root.querySelector('#ac-clear-attn-cancel');
+    if (cancelBtn) cancelBtn.disabled = false;
+    root._clearAttentionDismissLink = null;
+    if (modal) modal.classList.remove('visible');
   }
 
   function getConfig(root) {
@@ -459,21 +665,46 @@
   }
 
   /**
-   * POST /api/tukios-auth/product returns { success, product: 'ACP' | 'ABT' | 'Dual' }.
-   * Older servers may return { success, products: ['ACP', 'ABT'] } instead.
+   * Resolve canText from auth product payloads.
+   * Supported shapes:
+   *   - { success, can_text: 0|1|boolean }
+   *   - { success, product: 'ACP' | 'ABT' | 'Dual' }
+   *   - { success, products: ['ACP', 'ABT'] }
    */
-  function isAcpCardsOnlyProductResponse(data) {
-    if (!data || !data.success) return false;
-    var p = data.product;
-    if (typeof p === 'string' && p.trim().toUpperCase() === 'ACP') {
-      return true;
+  function resolveCanTextFromProductResponse(data) {
+    if (!data || data.success === false) return null;
+
+    // Newest preferred response shape.
+    if (Object.prototype.hasOwnProperty.call(data, 'can_text')) {
+      var rawCanText = data.can_text;
+      if (typeof rawCanText === 'boolean') return rawCanText;
+      if (typeof rawCanText === 'number') return rawCanText === 1;
+      if (typeof rawCanText === 'string') {
+        var canTextStr = rawCanText.trim().toLowerCase();
+        if (canTextStr === '1' || canTextStr === 'true') return true;
+        if (canTextStr === '0' || canTextStr === 'false') return false;
+      }
     }
+
+    // Backward-compatible product shape.
+    var p = data.product;
+    if (typeof p === 'string') {
+      var normProduct = p.trim().toUpperCase();
+      if (normProduct === 'ABT' || normProduct === 'DUAL') return true;
+      if (normProduct === 'ACP') return false;
+    }
+
+    // Older backward-compatible products list shape.
     var list = data.products;
-    if (!Array.isArray(list) || list.length === 0) return false;
-    var norm = list.map(function (x) {
-      return String(x || '').trim().toUpperCase();
-    });
-    return norm.indexOf('ABT') === -1 && norm.indexOf('ACP') !== -1;
+    if (Array.isArray(list) && list.length > 0) {
+      var norm = list.map(function (x) {
+        return String(x || '').trim().toUpperCase();
+      });
+      if (norm.indexOf('ABT') !== -1) return true;
+      if (norm.indexOf('ACP') !== -1) return false;
+    }
+
+    return null;
   }
 
   function extractLoginUrl(data) {
@@ -503,6 +734,11 @@
   function wireAftercareAdminButton(root, selector, defaultLabel) {
     var btn = root.querySelector(selector);
     if (!btn) return;
+    var originalHtml = btn.innerHTML;
+    var fallbackLabel = defaultLabel || btn.textContent || 'Open Aftercare.com';
+    function restoreLabel() {
+      btn.innerHTML = originalHtml || fallbackLabel;
+    }
     btn.addEventListener('click', function () {
       // Open a placeholder tab immediately so browsers don't block it after async auth.
       var newWindow = window.open('about:blank', '_blank');
@@ -519,12 +755,11 @@
         if (newWindow && !newWindow.closed) newWindow.close();
         btn.textContent = 'Configure API + account key';
         setTimeout(function () {
-          btn.textContent = defaultLabel;
+          restoreLabel();
         }, 2500);
         return;
       }
 
-      var label = defaultLabel;
       btn.disabled = true;
       btn.textContent = 'Signing in…';
 
@@ -558,7 +793,7 @@
           btn.disabled = false;
           btn.textContent = 'Sign-in unavailable';
           setTimeout(function () {
-            btn.textContent = label;
+            restoreLabel();
           }, 2500);
         })
         .catch(function () {
@@ -566,7 +801,7 @@
           btn.disabled = false;
           btn.textContent = 'Sign-in failed — try again';
           setTimeout(function () {
-            btn.textContent = label;
+            restoreLabel();
           }, 2500);
         });
     });
@@ -591,11 +826,17 @@
     })
       .then(function (data) {
         if (loading) loading.style.display = 'none';
-        if (isAcpCardsOnlyProductResponse(data)) {
-          if (acpOnly) acpOnly.style.display = 'block';
+
+        // Show one of two startup views based on can_text:
+        // can_text=1 => full inbox UI; can_text=0 => non-text interface.
+        var canText = resolveCanTextFromProductResponse(data);
+        if (canText === false) {
+          if (acpOnly) acpOnly.style.display = 'flex';
           wireAftercareAdminButton(root, '#ac-gate-login-btn', 'Open Aftercare.com');
+          wireAftercareAdminButton(root, '#ac-gate-login-btn-inline', 'Aftercare.com');
           return;
         }
+
         if (gate) gate.style.display = 'none';
         if (textUi) textUi.style.display = 'flex';
         onFullUi();
@@ -665,6 +906,9 @@
       renderConversationList(root, listEl, conversations, unreadCount);
       updateNavBadge(unreadCount);
       bindListEvents(root);
+      if (isCompactViewport()) {
+        setMobileView(root, 'list');
+      }
       var firstActive = root.querySelector('.ac-msg.active');
       if (firstActive) {
         var rid = firstActive.dataset.recipientId || firstActive.dataset.id;
@@ -679,25 +923,11 @@
   }
 
   function renderConversationList(root, listEl, conversations, unreadCount) {
-    var needsAttention = conversations.filter(function (c) {
-      var n = c.unreadCount != null ? c.unreadCount : (c.unread_count != null ? c.unread_count : 0);
-      return n > 0;
-    });
     var html = '';
-    var isFirst = true;
-
-    if (needsAttention.length > 0) {
-      html += '<div class="ac-group-hdr">Needs Attention <span class="ac-group-count">' + (unreadCount > 0 ? unreadCount : needsAttention.length) + '</span></div>';
-      needsAttention.forEach(function (c) {
-        html += conversationItemHtml(c, true, isFirst);
-        isFirst = false;
-      });
-      html += '<div class="ac-divider"></div>';
-    }
+    var isFirst = !isCompactViewport();
 
     conversations.forEach(function (c) {
-      if (needsAttention.indexOf(c) !== -1) return;
-      html += conversationItemHtml(c, false, isFirst);
+      html += conversationItemHtml(c, isFirst);
       isFirst = false;
     });
 
@@ -708,8 +938,16 @@
     listEl.innerHTML = html;
   }
 
-  function conversationItemHtml(c, needsAttention, isFirst) {
+  function conversationItemHtml(c, isFirst) {
     var id = c.recipient_id != null ? String(c.recipient_id) : (c.recipientId != null ? String(c.recipientId) : (c.id != null ? String(c.id) : ''));
+    var locationName = c.location_name
+      || c.locationName
+      || c.location
+      || (c.location_info && (c.location_info.name || c.location_info.location_name))
+      || (c.locationInfo && (c.locationInfo.name || c.locationInfo.locationName))
+      || (c.funeral_home && (c.funeral_home.name || c.funeral_home.location_name))
+      || (c.funeralHome && (c.funeralHome.name || c.funeralHome.locationName))
+      || 'Location';
     var name = (c.recipient_first_name != null || c.recipient_last_name != null)
       ? ((c.recipient_first_name || '') + ' ' + (c.recipient_last_name || '')).trim() || 'Unknown'
       : ((c.recipient && (c.recipient.name || c.recipient.displayName)) || 'Unknown');
@@ -718,12 +956,18 @@
     var rawAt = last.entry_date != null ? last.entry_date : (c.last_message_date != null ? c.last_message_date : (last.createdAt != null ? last.createdAt : (last.sentAt != null ? last.sentAt : (last.at != null ? last.at : last.date))));
     var dateStr = formatDate(rawAt);
     var activeClass = isFirst ? ' active' : '';
-    var sparkle = needsAttention ? '<div class="ac-msg-ind"><span class="ac-sparkle">✦</span></div>' : '<div class="ac-msg-ind"></div>';
-    var dismiss = needsAttention ? '<div class="ac-dismiss" data-resolve="' + escapeAttr(id) + '">Mark resolved</div>' : '';
-    return '<div class="ac-msg' + activeClass + '" data-id="' + escapeAttr(id) + '" data-recipient-id="' + escapeAttr(id) + '">' +
-      sparkle +
+    var needsAttention = conversationNeedsAttention(c);
+    var indicator = needsAttention
+      ? '<div class="ac-msg-ind"><span class="ac-alert-dot" aria-hidden="true"></span></div>'
+      : '<div class="ac-msg-ind"></div>';
+    var dismiss = needsAttention
+      ? '<div class="ac-attention-row"><span class="ac-attention-label">AI Flagged</span><div class="ac-dismiss" data-resolve="' + escapeAttr(id) + '">Clear</div></div>'
+      : '';
+    return '<div class="ac-msg' + activeClass + '" data-id="' + escapeAttr(id) + '" data-recipient-id="' + escapeAttr(id) + '" data-needs-attention="' + (needsAttention ? '1' : '0') + '">' +
+      indicator +
       '<div class="ac-msg-body">' +
-      '<div class="ac-msg-top"><span class="ac-msg-name">' + escapeHtml(name) + '</span><span class="ac-msg-date">' + escapeHtml(dateStr) + '</span></div>' +
+      '<div class="ac-msg-top"><span class="ac-msg-loc">' + escapeHtml(locationName) + '</span><span class="ac-msg-date">' + escapeHtml(dateStr) + '</span></div>' +
+      '<div class="ac-msg-recipient">' + escapeHtml(name) + '</div>' +
       '<div class="ac-msg-preview">' + escapeHtml(preview || '') + '</div>' +
       dismiss + '</div></div>';
   }
@@ -734,6 +978,34 @@
     div.textContent = s;
     return div.innerHTML;
   }
+
+  var MESSAGE_URL_RE = /(?:https?:\/\/|www\.)[^\s<]+/gi;
+
+  function trimUrlTrailingPunctuation(url) {
+    return url.replace(/[.,;:!?)}\]'"]+$/, '');
+  }
+
+  function linkifyMessageText(text) {
+    if (text == null || text === '') return '';
+    var str = String(text);
+    var result = '';
+    var lastIndex = 0;
+    var match;
+    MESSAGE_URL_RE.lastIndex = 0;
+    while ((match = MESSAGE_URL_RE.exec(str)) !== null) {
+      var raw = match[0];
+      var url = trimUrlTrailingPunctuation(raw);
+      var trail = raw.slice(url.length);
+      result += escapeHtml(str.slice(lastIndex, match.index));
+      var href = /^www\./i.test(url) ? 'https://' + url : url;
+      result += '<a class="ac-msg-link" href="' + escapeAttr(href) + '" target="_blank" rel="noopener noreferrer">' +
+        escapeHtml(url) + '</a>' + escapeHtml(trail);
+      lastIndex = match.index + raw.length;
+    }
+    result += escapeHtml(str.slice(lastIndex));
+    return result;
+  }
+
   function escapeAttr(s) {
     if (s == null) return '';
     return String(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -783,70 +1055,73 @@
 
   function bindListEvents(root) {
     root.querySelectorAll('.ac-msg').forEach(function (el) {
+      if (el.dataset.boundOpenThread === '1') return;
+      el.dataset.boundOpenThread = '1';
       el.addEventListener('click', function () {
         root.querySelectorAll('.ac-msg').forEach(function (m) { m.classList.remove('active'); });
         el.classList.add('active');
         var recipientId = el.dataset.recipientId || el.dataset.id;
-        if (recipientId) loadThread(root, recipientId);
+        if (recipientId) {
+          loadThread(root, recipientId);
+          if (isCompactViewport()) {
+            setMobileView(root, 'thread');
+          }
+        }
       });
     });
     root.querySelectorAll('.ac-dismiss').forEach(function (link) {
-      link.addEventListener('click', function (e) {
-        e.stopPropagation();
-        var id = link.dataset.resolve;
-        if (!id) return;
-        markReadByRecipient(root, id, link);
-      });
+      bindDismissLink(root, link);
     });
   }
 
-  function markReadByRecipient(root, recipientId, dismissLink) {
+  function clearAttentionByRecipient(root, recipientId, dismissLink) {
     var config = getConfig(root);
     if (!config.apiBase) {
-      removeMessageRow(root, dismissLink);
-      return;
+      return Promise.reject(new Error('API base URL not configured'));
     }
     var recipientIdNum = parseInt(recipientId, 10);
     if (isNaN(recipientIdNum)) {
-      removeMessageRow(root, dismissLink);
-      return;
+      return Promise.reject(new Error('Invalid recipient id'));
     }
-    fetch((config.apiBase.replace(/\/$/, '')) + '/' + WIDGET_PATH_PREFIX + '/text-messages/mark-read', {
+    return fetch((config.apiBase.replace(/\/$/, '')) + '/' + WIDGET_PATH_PREFIX + '/text-messages/clear-attention', {
       method: 'PATCH',
       headers: jsonHeaders(config),
       body: JSON.stringify({ recipient_id: recipientIdNum }),
     }).then(function (res) {
-      if (res.ok) removeMessageRow(root, dismissLink);
-    }).catch(function () {
-      removeMessageRow(root, dismissLink);
+      if (!res.ok) {
+        throw new Error('Failed to clear attention');
+      }
+      clearMessageAttention(root, dismissLink, recipientId);
     });
   }
-  function removeMessageRow(root, dismissLink) {
+  function clearMessageAttention(root, dismissLink, recipientId) {
     var msg = dismissLink && dismissLink.closest('.ac-msg');
+    if (!msg && recipientId) {
+      msg = root.querySelector('.ac-msg[data-recipient-id="' + recipientId + '"]')
+        || root.querySelector('.ac-msg[data-id="' + recipientId + '"]');
+    }
     if (!msg) return;
+    msg.dataset.needsAttention = '0';
+    var indicator = msg.querySelector('.ac-msg-ind');
+    if (indicator) indicator.innerHTML = '';
+    var attentionRow = msg.querySelector('.ac-attention-row');
+    if (attentionRow) attentionRow.remove();
 
-    msg.style.transition = 'opacity 0.3s';
-    msg.style.opacity = '0';
-    setTimeout(function () {
-      msg.remove();
-      updateAttentionCount(root);
-    }, 300);
+    var activeRecipientId = (root.querySelector('.ac-msg.active') && (root.querySelector('.ac-msg.active').dataset.recipientId || root.querySelector('.ac-msg.active').dataset.id)) || '';
+    var resolvedRecipientId = recipientId || (msg.dataset.recipientId || msg.dataset.id || '');
+    if (activeRecipientId && resolvedRecipientId && String(activeRecipientId) === String(resolvedRecipientId)) {
+      var msgsEl = root.querySelector('.ac-msgs');
+      if (msgsEl) msgsEl.dataset.recipientNeedsAttention = '0';
+      root.querySelectorAll('.ac-bubble.in').forEach(function (bubble) {
+        bubble.dataset.needsAttention = '0';
+        bubble.classList.remove('flagged');
+      });
+    }
+    updateAttentionCount(root);
   }
 
   function updateAttentionCount(root) {
-    var remaining = root.querySelectorAll('.ac-dismiss').length;
-    var countEl = root.querySelector('.ac-group-count');
-    var hdrEl = root.querySelector('.ac-group-hdr');
-    var divider = root.querySelector('.ac-divider');
-
-    if (remaining > 0) {
-      if (countEl) countEl.textContent = remaining;
-    } else {
-      if (hdrEl) hdrEl.remove();
-      if (divider) divider.remove();
-    }
-
-    updateNavBadge(remaining);
+    rebuildConversationSections(root);
   }
 
   function loadThread(root, recipientId) {
@@ -874,6 +1149,7 @@
     var inner = data.data || data;
     var messages = inner.messages || [];
     var recipient = inner.recipient || {};
+    var recipientAttentionActive = threadRecipientNeedsAttention(inner, recipient);
     var family = recipient.family || {};
 
     var firstName = recipient.first_name || recipient.firstName || '';
@@ -907,11 +1183,22 @@
 
     var msgsEl = root.querySelector('.ac-msgs');
     if (!msgsEl) return;
+    msgsEl.dataset.recipientNeedsAttention = recipientAttentionActive ? '1' : '0';
     var html = '';
-    messages.forEach(function (msg) {
+    var lastAttentionIndex = -1;
+    messages.forEach(function (msg, index) {
+      var msgTypeForAttention = msg.message_type || msg.messageType || '';
+      if (msgTypeForAttention === 'outgoing' || msgTypeForAttention === 'outgoing_campaign') return;
+      var hasModForAttention = msg.moderation && msg.moderation.length > 0;
+      var flaggedByStatusForAttention = messageNeedsAttention(msg);
+      var flaggedByLegacyForAttention = !msg.moderated && !msg.admin_viewed && hasModForAttention;
+      if (flaggedByStatusForAttention || flaggedByLegacyForAttention) lastAttentionIndex = index;
+    });
+
+    messages.forEach(function (msg, index) {
       var msgType = msg.message_type || msg.messageType || '';
       if (msgType === 'admin-note' || msgType === 'admin_note') {
-        html += '<div class="ac-flag">✦ ' + escapeHtml(msg.text_message || msg.textMessage || '') + '</div>';
+        html += '<div class="ac-flag">✦ ' + linkifyMessageText(msg.text_message || msg.textMessage || '') + '</div>';
         return;
       }
       var dir = (msgType === 'outgoing' || msgType === 'outgoing_campaign') ? 'out' : 'in';
@@ -920,24 +1207,32 @@
       var meta = formatMessageMeta(rawDate);
 
       var hasMod = msg.moderation && msg.moderation.length > 0;
-      var flagged = (msgType === 'incoming' && !msg.moderated && !msg.admin_viewed && hasMod) ? ' flagged' : '';
+      var flaggedByStatus = messageNeedsAttention(msg);
+      var flaggedByLegacy = !msg.moderated && !msg.admin_viewed && hasMod;
+      var hasAttention = (msgType === 'incoming' && (flaggedByStatus || flaggedByLegacy));
+      var isLastAttention = recipientAttentionActive && hasAttention && index === lastAttentionIndex;
+      var flagged = isLastAttention ? ' flagged' : '';
 
       var messageId = extractMessageId(msg);
       var idAttr = messageId ? ' data-message-id="' + escapeAttr(messageId) + '"' : '';
       var image = extractMessageImage(msg) || '';
       var reaction = extractMessageReaction(msg);
+      var mediaOnly = !body && !!image;
+      var bubbleClass = 'ac-bubble ' + dir + flagged + (mediaOnly ? ' media-only' : '');
       var imgHtml = image
-        ? '<div style="margin-top:8px;"><img src="' + escapeAttr(image) + '" style="max-width:200px;border-radius:8px;" /></div>'
+        ? '<div class="ac-image-wrap"><img class="ac-msg-image" src="' + escapeAttr(image) + '" /></div>'
         : '';
       var reactionHtml = reaction ? '<div class="ac-reaction-badge">' + escapeHtml(reaction) + '</div>' : '';
-      html += '<div class="ac-bubble ' + dir + flagged + '"' + idAttr +
+      html += '<div class="' + bubbleClass + '"' + idAttr +
         ' data-message-body="' + escapeAttr(body) + '"' +
         ' data-message-meta="' + escapeAttr(meta) + '"' +
         ' data-message-image="' + escapeAttr(image) + '"' +
+        ' data-needs-attention="' + (hasAttention ? '1' : '0') + '"' +
         ' data-message-reaction="' + escapeAttr(reaction) + '">' +
-        reactionHtml + escapeHtml(body) + imgHtml + '<div class="ac-meta">' + escapeHtml(meta) + '</div></div>';
+        reactionHtml + linkifyMessageText(body) + imgHtml + '<div class="ac-meta">' + escapeHtml(meta) + '</div></div>';
     });
     msgsEl.innerHTML = html || '<div class="ac-sys">No messages in this thread.</div>';
+    ensureOnlyLastFlaggedMessage(msgsEl);
     scrollMessagesToBottom(msgsEl);
 
     var replyBar = root.querySelector('#ac-reply-bar');
@@ -1089,9 +1384,10 @@
     if (!recipientId) return;
 
     var sendBtn = root.querySelector('.ac-send-btn');
+    var sendBtnLabel = sendBtn ? sendBtn.querySelector('.ac-send-label') : null;
     if (sendBtn) {
       sendBtn.disabled = true;
-      sendBtn.textContent = 'Sending…';
+      if (sendBtnLabel) sendBtnLabel.textContent = 'Sending...';
     }
 
     var msgsEl = root.querySelector('.ac-msgs');
@@ -1100,21 +1396,8 @@
       var meta = formatMessageMeta(now.toISOString());
       var bubble = document.createElement('div');
       bubble.className = 'ac-bubble out';
+      setBubbleContent(bubble, message, meta, imageUrl, '');
       bubble.dataset.optimistic = 'true';
-      if (imageUrl) {
-        var previewImg = document.createElement('img');
-        previewImg.src = imageUrl;
-        previewImg.style.cssText = 'max-width:180px;max-height:180px;border-radius:8px;display:block;margin-bottom:4px;';
-        bubble.appendChild(previewImg);
-      }
-      if (message) {
-        var textNode = document.createTextNode(message);
-        bubble.appendChild(textNode);
-      }
-      var metaDiv = document.createElement('div');
-      metaDiv.className = 'ac-meta';
-      metaDiv.textContent = meta;
-      bubble.appendChild(metaDiv);
       msgsEl.appendChild(bubble);
       msgsEl.scrollTop = msgsEl.scrollHeight;
     }
@@ -1129,13 +1412,13 @@
       .then(function () {
         if (sendBtn) {
           sendBtn.disabled = false;
-          sendBtn.textContent = 'Send';
+          if (sendBtnLabel) sendBtnLabel.textContent = 'Send';
         }
       })
       .catch(function () {
         if (sendBtn) {
           sendBtn.disabled = false;
-          sendBtn.textContent = 'Send';
+          if (sendBtnLabel) sendBtnLabel.textContent = 'Send';
         }
         if (msgsEl && msgsEl.lastElementChild) {
           msgsEl.lastElementChild.style.opacity = '0.5';
@@ -1181,11 +1464,27 @@ ${S} .ac-topbar-settings:hover:not(:disabled) { border-color: #4a6cf7; backgroun
 ${S} .ac-topbar-settings:disabled { opacity: 0.65; cursor: not-allowed; }
 
 /* Product gate (ACP-only accounts: no text inbox) */
-${S} .ac-product-gate { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 24px; background: #fff; min-height: 180px; }
-${S} .ac-gate-loading { font-size: 15px; color: #8b8fa3; }
-${S} .ac-gate-acp-only { text-align: center; max-width: 380px; transform: translateY(-300px); }
-${S} .ac-gate-copy { font-size: 15px; line-height: 1.55; color: #1a1a2e; margin-bottom: 20px; }
-${S} .ac-acp-login-btn { font-family: inherit; }
+${S} .ac-product-gate { flex: 1; display: flex; flex-direction: column; background: #fff; min-height: 180px; }
+${S} .ac-gate-loading { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 15px; color: #8b8fa3; }
+${S} .ac-gate-acp-only { display: flex; flex-direction: column; height: 100%; }
+${S} .ac-gate-topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: #fff; border-bottom: 1px solid #e2e6ec; flex-shrink: 0; }
+${S} .ac-gate-title { font-size: 20px; font-weight: 800; color: #1a1a2e; }
+${S} .ac-topbar-link { display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-size: 13px; font-weight: 600; color: #02a473; text-decoration: none; padding: 6px 14px; border: 1px solid #c8ece0; border-radius: 6px; background: #f0faf6; transition: all 0.15s; cursor: pointer; }
+${S} .ac-topbar-link:hover:not(:disabled) { background: #e0f5ed; border-color: #02a473; }
+${S} .ac-topbar-link:disabled { opacity: 0.65; cursor: not-allowed; }
+${S} .ac-topbar-link svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+${S} .ac-card-only-content { padding: 32px 36px; max-width: 620px; }
+${S} .ac-card-status { font-size: 16px; font-weight: 600; color: #1a1a2e; margin: 0 0 28px; line-height: 1.5; }
+${S} .ac-card-actions { display: flex; flex-direction: column; gap: 24px; }
+${S} .ac-card-action { display: flex; align-items: flex-start; gap: 14px; }
+${S} .ac-card-action-icon { width: 38px; height: 38px; border-radius: 9px; background: #f0faf6; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+${S} .ac-card-action-icon svg { width: 18px; height: 18px; stroke: #02a473; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+${S} .ac-card-action-body { display: flex; flex-direction: column; }
+${S} .ac-card-action-text { font-size: 15px; color: #4a4d52; line-height: 1.6; }
+${S} .ac-card-screenshot { margin-top: 12px; border-radius: 6px; border: 1px solid #e2e6ec; max-width: 100%; height: auto; display: block; background: #f8fafc; }
+${S} .ac-card-inline-btn { margin-top: 10px; width: fit-content; }
+${S} .ac-card-link-muted { color: #1a1a2e; font-weight: 600; text-decoration: none; }
+${S} .ac-card-link-muted:hover { text-decoration: underline; }
 ${S} .ac-text-ui { display: none; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 
 /* Inbox layout */
@@ -1201,18 +1500,22 @@ ${S} .ac-msg { display: flex; align-items: flex-start; padding: 14px 16px; borde
 ${S} .ac-msg:hover { background: #f8f9fb; }
 ${S} .ac-msg.active { background: #eef2ff; border-left: 3px solid #4a6cf7; padding-left: 13px; }
 ${S} .ac-msg-ind { width: 20px; min-width: 20px; padding-top: 4px; }
-${S} .ac-sparkle { font-size: 13px; color: #e74c3c; font-weight: 700; }
+${S} .ac-alert-dot { display: block; width: 8px; height: 8px; border-radius: 50%; background: #e74c3c; margin-top: 4px; }
 ${S} .ac-msg-body { flex: 1; min-width: 0; }
 ${S} .ac-msg-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
-${S} .ac-msg-name { font-weight: 600; font-size: 14px; }
+${S} .ac-msg-loc { font-size: 11px; font-weight: 700; color: #8b8fa3; text-transform: uppercase; letter-spacing: 0.35px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
 ${S} .ac-msg-date { font-size: 12px; color: #8b8fa3; white-space: nowrap; }
+${S} .ac-msg-recipient { font-weight: 600; font-size: 14px; color: #1a1a2e; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 ${S} .ac-msg-preview { font-size: 13px; color: #5a5d72; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-${S} .ac-dismiss { font-size: 11px; color: #8b8fa3; margin-top: 4px; cursor: pointer; transition: color 0.15s; }
+${S} .ac-attention-row { margin-top: 4px; display: flex; align-items: center; gap: 12px; font-size: 11px; }
+${S} .ac-attention-label { color: #b1b7c8; font-weight: 600; }
+${S} .ac-dismiss { color: #b1b7c8; cursor: pointer; transition: color 0.15s; }
 ${S} .ac-dismiss:hover { color: #4a6cf7; }
 
 /* Conversation */
 ${S} .ac-convo { flex: 1; display: flex; flex-direction: column; background: #f8f9fb; }
 ${S} .ac-convo-hdr { padding: 14px 24px; background: #fff; border-bottom: 1px solid #e2e6ec; display: flex; align-items: center; gap: 16px; }
+${S} .ac-mobile-back { display: none; width: 30px; height: 30px; border: 1px solid #dde1e8; border-radius: 8px; background: #fff; color: #5a5d72; cursor: pointer; font-size: 18px; line-height: 1; align-items: center; justify-content: center; font-family: inherit; }
 ${S} .ac-convo-name { font-size: 15px; font-weight: 600; color: #1a1a2e; }
 ${S} .ac-convo-phone { font-size: 12px; color: #8b8fa3; margin-top: 1px; }
 ${S} .ac-convo-sep { width: 1px; height: 32px; background: #e2e6ec; }
@@ -1222,30 +1525,45 @@ ${S} .ac-msgs { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 24px; di
 ${S} .ac-sys { align-self: center; font-size: 11px; color: #8b8fa3; font-weight: 500; }
 ${S} .ac-bubble { max-width: 75%; padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.5; position: relative; overflow: visible; }
 ${S} .ac-bubble.out { align-self: flex-end; background: #4a6cf7; color: #fff; border-bottom-right-radius: 4px; }
+${S} .ac-bubble.out.media-only { background: transparent; color: #1a1a2e; padding: 0; border-radius: 0; }
 ${S} .ac-bubble.in { align-self: flex-start; background: #fff; color: #1a1a2e; border: 1px solid #e2e6ec; border-bottom-left-radius: 4px; }
-${S} .ac-bubble.in.flagged { border-color: #f59e0b; border-width: 1.5px; box-shadow: 0 0 0 1px rgba(245,158,11,0.15); }
+${S} .ac-bubble.in.media-only { background: transparent; color: #1a1a2e; padding: 0; border-radius: 0; border: 0; }
+${S} .ac-bubble.in.flagged { border-color: #e74c3c; border-width: 2px; box-shadow: 0 0 0 1px rgba(231,76,60,0.12); }
+${S} .ac-image-wrap { margin-top: 8px; }
+${S} .ac-msg-image { max-width: 200px; max-height: 220px; border-radius: 8px; display: block; }
+${S} .ac-bubble.media-only .ac-image-wrap { margin-top: 0; }
 ${S} .ac-reaction-badge { position: absolute; top: -10px; left: -10px; min-width: 26px; height: 22px; padding: 0 7px; border-radius: 999px; background: #fff; border: 1px solid #dde1e8; box-shadow: 0 2px 6px rgba(0,0,0,0.12); display: inline-flex; align-items: center; justify-content: center; font-size: 13px; line-height: 1; }
+${S} .ac-msg-link { text-decoration: underline; word-break: break-all; }
+${S} .ac-bubble.in .ac-msg-link { color: #4a6cf7; }
+${S} .ac-bubble.out .ac-msg-link { color: #fff; }
+${S} .ac-flag .ac-msg-link { color: #92400e; }
 ${S} .ac-meta { font-size: 11px; opacity: 0.6; margin-top: 4px; }
 ${S} .ac-bubble.out .ac-meta { text-align: right; }
+${S} .ac-bubble.out.media-only .ac-meta { color: #8b8fa3; opacity: 1; text-align: left; margin-top: 6px; }
 ${S} .ac-flag { font-size: 12px; color: #92400e; font-weight: 500; padding: 4px 0; align-self: flex-start; }
 ${S} .ac-flag-notif { color: #b0956a; font-weight: 400; }
 
 /* Reply bar */
-${S} .ac-reply { padding: 16px 24px; background: #fff; border-top: 1px solid #e2e6ec; display: flex; gap: 12px; align-items: flex-end; }
+${S} .ac-reply { padding: 16px 24px; background: #fff; border-top: 1px solid #e2e6ec; display: flex; gap: 10px; align-items: center; }
 ${S} .ac-reply-wrap { flex: 1; display: flex; flex-direction: column; gap: 6px; }
-${S} .ac-reply-input-row { position: relative; display: flex; align-items: center; }
-${S} .ac-reply-input-row input[type=text] { width: 100%; padding: 10px 70px 10px 14px; border: 1px solid #dde1e8; border-radius: 8px; font-size: 14px; font-family: inherit; background: #f8f9fb; outline: none; }
+${S} .ac-reply-input-row { position: relative; display: flex; align-items: center; gap: 8px; }
+${S} .ac-reply-input-row input[type=text] { width: 100%; padding: 10px 14px; border: 1px solid #dde1e8; border-radius: 10px; font-size: 14px; font-family: inherit; background: #f8f9fb; outline: none; }
 ${S} .ac-reply-input-row input[type=text]:focus { border-color: #4a6cf7; }
-${S} .ac-reply-icons { position: absolute; right: 8px; display: flex; gap: 2px; }
+${S} .ac-reply-icons { display: flex; gap: 8px; }
 ${S} .ac-img-chip { display: flex; align-items: center; gap: 8px; background: #f0f3ff; border: 1px solid #c5d0fb; border-radius: 8px; padding: 6px 10px; }
 ${S} .ac-img-thumb { height: 40px; width: 40px; object-fit: cover; border-radius: 4px; border: 1px solid #dde1e8; }
 ${S} .ac-img-chip-label { font-size: 12px; color: #4a6cf7; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 ${S} .ac-img-chip-rm { background: none; border: none; cursor: pointer; color: #5a5d72; font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 4px; font-family: inherit; }
 ${S} .ac-img-chip-rm:hover { background: #e0e5ff; color: #e74c3c; }
 ${S} .ac-img-uploading { font-size: 12px; color: #8b8fa3; padding: 4px 0; }
-${S} .ac-reply-ibtn { width: 30px; height: 30px; border: none; background: transparent; cursor: pointer; font-size: 16px; border-radius: 6px; display: flex; align-items: center; justify-content: center; opacity: 0.4; transition: opacity 0.15s; }
-${S} .ac-reply-ibtn:hover { opacity: 0.8; }
-${S} .ac-send-btn { padding: 10px 20px; background: #4a6cf7; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
+${S} .ac-reply-ibtn { width: 40px; height: 40px; border: 1px solid #dde1e8; background: #fff; color: #98a2b3; cursor: pointer; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; transition: all 0.15s; }
+${S} .ac-reply-ibtn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+${S} .ac-reply-ibtn:hover { color: #6b7280; border-color: #c9ced8; background: #f9fafb; }
+${S} .ac-send-btn { height: 44px; padding: 0 20px; background: #c1c7d0; color: #fff; border: none; border-radius: 10px; font-size: 24px; font-weight: 600; cursor: pointer; font-family: inherit; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-width: 98px; }
+${S} .ac-send-btn svg { width: 16px; height: 16px; stroke: currentColor; fill: currentColor; stroke-width: 1.5; }
+${S} .ac-send-btn .ac-send-label { font-size: 15px; font-weight: 600; line-height: 1; }
+${S} .ac-send-btn:hover { background: #b5bcc7; }
+${S} .ac-send-btn:disabled { opacity: 0.7; cursor: not-allowed; }
 ${S} .ac-reply.suppressed { background: #fafafa; flex-direction: column; align-items: stretch; gap: 0; }
 ${S} .ac-suppressed { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: #f8f0e5; border: 1px solid #f0d8b0; border-radius: 8px; font-size: 13px; color: #8a6d00; line-height: 1.4; }
 ${S} .ac-suppressed-icon { font-size: 18px; flex-shrink: 0; }
@@ -1299,6 +1617,33 @@ ${S} .ac-confirm-acts { display: flex; gap: 10px; justify-content: flex-end; mar
 ${S} .ac-confirm-acts button { padding: 9px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; border: none; }
 ${S} .ac-cancel-btn { background: #f0f2f5; color: #5a5d72; }
 ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
+
+/* Clear attention confirm modal */
+${S} .ac-clear-confirm { width: 420px; max-width: 90vw; background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); overflow: hidden; animation: acModalIn 0.2s ease; padding: 14px 16px 16px; }
+${S} .ac-clear-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+${S} .ac-clear-title { font-size: 22px; line-height: 1.15; font-weight: 700; color: #1b2340; }
+${S} .ac-clear-close { width: 28px; height: 28px; border-radius: 6px; border: none; background: transparent; color: #9aabc5; font-size: 22px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+${S} .ac-clear-copy { font-size: 15px; line-height: 1.4; color: #1b2340; margin-bottom: 12px; }
+${S} .ac-clear-actions { display: flex; gap: 10px; }
+${S} .ac-clear-actions button { flex: 1; height: 44px; border-radius: 8px; border: none; font-size: 16px; font-weight: 600; font-family: inherit; cursor: pointer; }
+${S} .ac-clear-cancel { background: #dbe0e7; color: #0f1f3b; }
+${S} .ac-clear-confirm-btn { background: #0f6d4b; color: #fff; }
+
+/* Compact/mobile behavior */
+@media (max-width: 820px) {
+${S}.ac-mobile .ac-inbox { flex: 1; min-height: 0; }
+${S}.ac-mobile .ac-list { width: 100%; min-width: 0; border-right: none; }
+${S}.ac-mobile .ac-convo { width: 100%; }
+${S}.ac-mobile .ac-detail { display: none; }
+${S}.ac-mobile.ac-mobile-list .ac-list { display: flex; }
+${S}.ac-mobile.ac-mobile-list .ac-convo { display: none; }
+${S}.ac-mobile.ac-mobile-thread .ac-list { display: none; }
+${S}.ac-mobile.ac-mobile-thread .ac-convo { display: flex; }
+${S}.ac-mobile .ac-mobile-back { display: inline-flex; }
+${S}.ac-mobile .ac-convo-hdr { padding: 10px 12px; gap: 10px; }
+${S}.ac-mobile .ac-msgs { padding: 14px; }
+${S}.ac-mobile .ac-reply { padding: 10px 12px; }
+}
 `;
   }
 
@@ -1310,8 +1655,45 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
 <div id="ac-product-gate" class="ac-product-gate">
   <div id="ac-gate-loading" class="ac-gate-loading">Loading…</div>
   <div id="ac-gate-acp-only" class="ac-gate-acp-only" style="display:none">
-    <p class="ac-gate-copy">Click below to open Aftercare.com.</p>
-    <button type="button" class="ac-acp-login-btn ac-topbar-settings" id="ac-gate-login-btn">Open Aftercare.com</button>
+    <div class="ac-gate-topbar">
+      <div class="ac-gate-title">Aftercare Card Program</div>
+      <button type="button" class="ac-topbar-link" id="ac-gate-login-btn">
+        Manage your account on Aftercare.com
+        <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+      </button>
+    </div>
+    <div class="ac-card-only-content">
+      <p class="ac-card-status">Your funeral home is enrolled in the Aftercare Card Program.</p>
+      <div class="ac-card-actions">
+        <div class="ac-card-action">
+          <div class="ac-card-action-icon">
+            <svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"></rect><polyline points="22,7 12,14 2,7"></polyline></svg>
+          </div>
+          <div class="ac-card-action-body">
+            <span class="ac-card-action-text">To enroll a family to receive cards, you'll see the option under "Next Steps" when you publish an obituary.</span>
+            <img class="ac-card-screenshot" alt="Next Steps screenshot" src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='900' height='280' viewBox='0 0 900 280'%3E%3Crect width='900' height='280' fill='%23f8fafc'/%3E%3Crect x='22' y='20' width='856' height='240' rx='10' fill='%23ffffff' stroke='%23e2e6ec'/%3E%3Crect x='44' y='44' width='300' height='24' rx='4' fill='%23e5e7eb'/%3E%3Crect x='44' y='84' width='812' height='14' rx='4' fill='%23eef2f7'/%3E%3Crect x='44' y='108' width='782' height='14' rx='4' fill='%23eef2f7'/%3E%3Crect x='44' y='132' width='816' height='14' rx='4' fill='%23eef2f7'/%3E%3Crect x='44' y='168' width='170' height='34' rx='6' fill='%2302a473'/%3E%3Crect x='44' y='214' width='240' height='12' rx='4' fill='%23dbe3ee'/%3E%3C/svg%3E" />
+          </div>
+        </div>
+        <div class="ac-card-action">
+          <div class="ac-card-action-icon">
+            <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+          </div>
+          <div class="ac-card-action-body">
+            <span class="ac-card-action-text">To view enrolled families or download completed surveys, go to your account at Aftercare.com.</span>
+            <button type="button" class="ac-topbar-link ac-card-inline-btn" id="ac-gate-login-btn-inline">
+              Aftercare.com
+              <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="ac-card-action">
+          <div class="ac-card-action-icon">
+            <svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.362 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.338 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+          </div>
+          <span class="ac-card-action-text">If you need help or have questions about your program, call <a href="tel:18007217097" class="ac-card-link-muted">1-800-721-7097</a> or email <a href="mailto:support@aftercare.com" class="ac-card-link-muted">support@aftercare.com</a>.</span>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 <div id="ac-text-ui" class="ac-text-ui" style="display:none">
@@ -1333,6 +1715,7 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
   <!-- Conversation -->
   <div class="ac-convo">
     <div class="ac-convo-hdr">
+      <button type="button" class="ac-mobile-back" id="ac-mobile-back-btn" title="Back to recipients" aria-label="Back to recipients">←</button>
       <div>
         <div class="ac-convo-name"></div>
         <div class="ac-convo-phone"></div>
@@ -1357,13 +1740,31 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
           <input class="message-input" name="message" type="text" placeholder="" />
           <input type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif" id="ac-img-file" style="display:none" />
           <div class="ac-reply-icons">
-            <button type="button" class="ac-reply-ibtn ac-emoji-btn" title="Emoji">😊</button>
-            <button type="button" class="ac-reply-ibtn ac-img-btn" title="Attach image">🖼️</button>
+            <button type="button" class="ac-reply-ibtn ac-emoji-btn" title="Emoji" aria-label="Emoji">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9"></circle>
+                <circle cx="9" cy="10" r="1"></circle>
+                <circle cx="15" cy="10" r="1"></circle>
+                <path d="M8 14c1 1.5 2.3 2.2 4 2.2s3-.7 4-2.2"></path>
+              </svg>
+            </button>
+            <button type="button" class="ac-reply-ibtn ac-img-btn" title="Attach image" aria-label="Attach image">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+                <circle cx="9" cy="10" r="1.6"></circle>
+                <path d="M4.5 17l5.2-5.2a1 1 0 0 1 1.4 0L14 14.7a1 1 0 0 0 1.4 0l2.8-2.8a1 1 0 0 1 1.4 0L21 13.3"></path>
+              </svg>
+            </button>
           </div>
           <div class="ac-emoji-panel" id="ac-emoji-panel"></div>
         </div>
       </div>
-      <button class="ac-send-btn">Send</button>
+      <button class="ac-send-btn">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3 11.5l17-8.5-4.8 18-4.1-6.2-8.1-3.3z"></path>
+        </svg>
+        <span class="ac-send-label">Send</span>
+      </button>
     </div>
   </div>
 
@@ -1410,6 +1811,21 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
     </div>
   </div>
 </div>
+
+<!-- Clear Attention Confirm Modal -->
+<div class="ac-modal-bg" id="ac-clear-attn-modal">
+  <div class="ac-clear-confirm">
+    <div class="ac-clear-top">
+      <h3 class="ac-clear-title">Mark as Resolved?</h3>
+      <button class="ac-clear-close" id="ac-clear-attn-close" aria-label="Close">×</button>
+    </div>
+    <p class="ac-clear-copy">Are you sure you want to mark this conversation as resolved? It will be removed from the "Needs Attention" list.</p>
+    <div class="ac-clear-actions">
+      <button class="ac-clear-cancel" id="ac-clear-attn-cancel">Cancel</button>
+      <button class="ac-clear-confirm-btn" id="ac-clear-attn-confirm">Yes, resolve</button>
+    </div>
+  </div>
+</div>
 </div>
 `;
   }
@@ -1419,6 +1835,13 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
   // ============================================================
   function bindEvents(root) {
     wireAftercareAdminButton(root, '#ac-open-admin-btn', 'Open Aftercare.com');
+    initResponsiveBehavior(root);
+    var mobileBackBtn = root.querySelector('#ac-mobile-back-btn');
+    if (mobileBackBtn) {
+      mobileBackBtn.addEventListener('click', function () {
+        setMobileView(root, 'list');
+      });
+    }
     root.querySelector('#ac-modal-close-btn').addEventListener('click', () => {
       root.querySelector('#ac-msg-modal').classList.remove('visible');
     });
@@ -1482,6 +1905,50 @@ ${S} .ac-stop-btn { background: #e74c3c; color: #fff; }
         root.querySelector('#ac-stop-modal').classList.remove('visible');
       }
     });
+
+    // Clear attention confirm modal
+    var clearModal = root.querySelector('#ac-clear-attn-modal');
+    var clearClose = root.querySelector('#ac-clear-attn-close');
+    var clearCancel = root.querySelector('#ac-clear-attn-cancel');
+    var clearConfirm = root.querySelector('#ac-clear-attn-confirm');
+    if (clearClose) {
+      clearClose.addEventListener('click', function () {
+        closeClearAttentionConfirm(root);
+      });
+    }
+    if (clearCancel) {
+      clearCancel.addEventListener('click', function () {
+        closeClearAttentionConfirm(root);
+      });
+    }
+    if (clearModal) {
+      clearModal.addEventListener('click', function (e) {
+        if (e.target === clearModal) closeClearAttentionConfirm(root);
+      });
+    }
+    if (clearConfirm) {
+      clearConfirm.addEventListener('click', function () {
+        var recipientId = clearConfirm.dataset.recipientId || '';
+        if (!recipientId) {
+          closeClearAttentionConfirm(root);
+          return;
+        }
+        var dismissLink = root._clearAttentionDismissLink || null;
+        var cancelBtn = root.querySelector('#ac-clear-attn-cancel');
+        clearConfirm.disabled = true;
+        clearConfirm.textContent = 'Resolving...';
+        if (cancelBtn) cancelBtn.disabled = true;
+        clearAttentionByRecipient(root, recipientId, dismissLink)
+          .then(function () {
+            closeClearAttentionConfirm(root);
+          })
+          .catch(function () {
+            clearConfirm.disabled = false;
+            clearConfirm.textContent = 'Try again';
+            if (cancelBtn) cancelBtn.disabled = false;
+          });
+      });
+    }
 
     // Stop confirm execute
     root.querySelector('#ac-stop-confirm').addEventListener('click', () => {
