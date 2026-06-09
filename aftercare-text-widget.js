@@ -1,5 +1,5 @@
 /**
- * Aftercare Text Widget V1.1.4
+ * Aftercare Text Widget V1.1.5
  * =====================
  * Self-contained script that renders the Aftercare Text inbox
  * inside a Shadow DOM root on any host page.
@@ -924,6 +924,7 @@
     if (msgsEl) {
       msgsEl.innerHTML = '<div class="ac-sys">No conversation to display.</div>';
     }
+    clearScheduleList(root);
   }
 
   function loadConversationList(root) {
@@ -1183,6 +1184,8 @@
     var config = getConfig(root);
     if (!config.apiBase) return;
 
+    root._scheduleLoadId = (root._scheduleLoadId || 0) + 1;
+
     var msgsEl = root.querySelector('.ac-msgs');
     if (msgsEl) {
       msgsEl.innerHTML = '<div class="ac-sys">Loading messages…</div>';
@@ -1301,13 +1304,26 @@
 
     var familyId = family.id || recipient.family_id || recipient.familyId;
     if (familyId) {
-      loadSchedule(root, familyId, recipientId);
+      loadSchedule(root, familyId);
+    } else {
+      clearScheduleList(root);
     }
   }
 
-  function loadSchedule(root, familyId, recipientId) {
+  function clearScheduleList(root) {
+    var listEl = root.querySelector('#ac-schedule-list');
+    if (listEl) {
+      listEl.innerHTML = '<div style="font-size:12px;color:#8b8fa3;padding:8px 0;">No scheduled messages.</div>';
+    }
+    root._scheduleItems = {};
+  }
+
+  function loadSchedule(root, familyId) {
     var config = getConfig(root);
     if (!config.apiBase) return;
+
+    root._scheduleLoadId = (root._scheduleLoadId || 0) + 1;
+    var loadId = root._scheduleLoadId;
 
     var listEl = root.querySelector('#ac-schedule-list');
     if (listEl) {
@@ -1316,16 +1332,12 @@
 
     apiGet(config, WIDGET_PATH_PREFIX + '/aftercare-families/' + encodeURIComponent(familyId) + '/schedule', { type: 'text' })
       .then(function (res) {
+        if (loadId !== root._scheduleLoadId) return;
         var items = res.data || res || [];
-        if (recipientId) {
-          items = items.filter(function (item) {
-            var rid = item.recipient_id != null ? String(item.recipient_id) : (item.recipientId != null ? String(item.recipientId) : '');
-            return rid === String(recipientId);
-          });
-        }
         renderSchedule(root, items);
       })
       .catch(function () {
+        if (loadId !== root._scheduleLoadId) return;
         if (listEl) {
           listEl.innerHTML = '<div style="font-size:12px;color:#8b8fa3;padding:8px 0;">Unable to load schedule.</div>';
         }
@@ -1352,7 +1364,7 @@
       var itemId = String(item.id || '');
       root._scheduleItems[itemId] = item;
 
-      var label = item.description || item.desc || '';
+      var label = decodeHtmlEntities(item.description || item.desc || '');
       var rawDate = item.send_date || item.sendDate || '';
       var dateStr = '';
       if (rawDate) {
@@ -1386,7 +1398,7 @@
         if (!item) return;
 
         var isSent = !!item.sent;
-        var label = item.description || item.desc || '';
+        var label = decodeHtmlEntities(item.description || item.desc || '');
         var rawDate = item.send_date || item.sendDate || '';
         var dateStr = '';
         if (rawDate) {
