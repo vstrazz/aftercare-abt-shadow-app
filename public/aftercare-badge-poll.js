@@ -19,8 +19,8 @@
   'use strict';
 
   var POLL_INTERVAL = 120000; // 2 minutes
-  var DEFAULT_API_BASE = 'https://id3j3rpizbm6pbkbqomknlk3740ektpb.lambda-url.us-east-1.on.aws/api';
-  var DEFAULT_API_KEY = 'iYqk0m7sfswRkGoLSMoYNC054ZDYg80g';
+  var DEFAULT_API_BASE = 'https://aftercare-app-api-18edbb932ed8.herokuapp.com/api/';
+  var DEFAULT_API_KEY = '';
   // account_api_key refers to the tukios_api_key stored on the accounts table.
   var DEFAULT_ACCOUNT_API_KEY = '1';
   var BADGE_ID = 'aftercare-text-nav-badge';

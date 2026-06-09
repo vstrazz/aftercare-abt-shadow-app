@@ -22,11 +22,11 @@
 (function () {
   'use strict';
 
-  const DEFAULT_API_BASE = 'https://aftercare-app-api-staging-be5961c463a6.herokuapp.com/api';
+  const DEFAULT_API_BASE = 'https://aftercare-app-api-18edbb932ed8.herokuapp.com/api/';
   // Global API client key (matches API_CLIENT_KEYS on the API). Sent as
   // X-API-Key on every request to satisfy the global requireApiKey gate.
   // Hosts can override via data-api-key or AFTERCARE_CONFIG.apiKey.
-  const DEFAULT_API_KEY = 'iYqk0m7sfswRkGoLSMoYNC054ZDYg80g';
+  const DEFAULT_API_KEY = '';
   // account_api_key refers to the tukios_api_key stored on the accounts table.
   const DEFAULT_ACCOUNT_API_KEY = '1';
   // All widget calls go through the per-account auth wrapper mounted at
@@ -40,47 +40,102 @@
   var _activeStream = null;
   var _activeStreamRecipientId = null;
 
+  function streamHeaders(config) {
+    var h = { Accept: 'text/event-stream' };
+    if (config && config.apiKey) h['X-API-Key'] = config.apiKey;
+    if (config && config.account_api_key) h['Authorization'] = 'Bearer ' + config.account_api_key;
+    return h;
+  }
+
+  function parseSSEBuffer(buffer) {
+    var events = [];
+    var normalized = buffer.replace(/\r\n/g, '\n');
+    var parts = normalized.split('\n\n');
+    var remainder = parts.pop() || '';
+    for (var i = 0; i < parts.length; i++) {
+      var block = parts[i].trim();
+      if (!block) continue;
+      var lines = block.split('\n');
+      var eventName = 'message';
+      var dataLines = [];
+      for (var j = 0; j < lines.length; j++) {
+        var line = lines[j];
+        if (line.indexOf('event:') === 0) {
+          eventName = line.slice(6).trim();
+        } else if (line.indexOf('data:') === 0) {
+          dataLines.push(line.slice(5).trimStart());
+        }
+      }
+      if (dataLines.length) {
+        events.push({ event: eventName, data: dataLines.join('\n') });
+      }
+    }
+    return { events: events, remainder: remainder };
+  }
+
   function connectStream(root, recipientId) {
     disconnectStream();
 
     var config = getConfig(root);
-    if (!config.apiBase) return;
+    if (!config.apiBase || !config.account_api_key) return;
 
-    var streamBase = config.apiBase.replace(/\/$/, '') + '/' + WIDGET_PATH_PREFIX + '/text-messages/stream/' + encodeURIComponent(recipientId);
-    var streamUrl = new URL(streamBase);
-    // EventSource does not support custom request headers, so for the SSE stream we have to
-    // pass account_api_key as a query parameter instead of an Authorization: Bearer header.
-    // account_api_key is the tukios_api_key stored on the accounts table.
-    streamUrl.searchParams.set('account_api_key', String(config.account_api_key));
-    if (config.apiKey) streamUrl.searchParams.set('api_key', config.apiKey);
-    var es;
-    try {
-      es = new EventSource(streamUrl.toString());
-    } catch (e) {
-      return;
-    }
+    var streamUrl = config.apiBase.replace(/\/$/, '') + '/' + WIDGET_PATH_PREFIX + '/text-messages/stream/' + encodeURIComponent(recipientId);
+    var controller = new AbortController();
+    var closed = false;
 
-    _activeStream = es;
+    _activeStream = {
+      close: function () {
+        closed = true;
+        controller.abort();
+      },
+    };
     _activeStreamRecipientId = recipientId;
 
-    es.addEventListener('message_received', function (evt) {
-      if (_activeStreamRecipientId !== recipientId) return;
+    function scheduleReconnect() {
+      if (closed || _activeStreamRecipientId !== recipientId) return;
+      setTimeout(function () {
+        if (!closed && _activeStreamRecipientId === recipientId) {
+          connectStream(root, recipientId);
+        }
+      }, 5000);
+    }
 
-      var msg;
-      try { msg = JSON.parse(evt.data); } catch (e) { return; }
+    function readStream(reader, decoder, buffer) {
+      return reader.read().then(function (result) {
+        if (closed || _activeStreamRecipientId !== recipientId) return;
+        if (result.done) {
+          scheduleReconnect();
+          return;
+        }
+        buffer += decoder.decode(result.value, { stream: true });
+        var parsed = parseSSEBuffer(buffer);
+        buffer = parsed.remainder;
+        for (var i = 0; i < parsed.events.length; i++) {
+          var evt = parsed.events[i];
+          if (evt.event !== 'message_received') continue;
+          try {
+            appendStreamMessage(root, JSON.parse(evt.data), recipientId);
+          } catch (e) { /* ignore malformed event */ }
+        }
+        return readStream(reader, decoder, buffer);
+      });
+    }
 
-      appendStreamMessage(root, msg, recipientId);
-    });
-
-    es.addEventListener('error', function () {
-      if (es.readyState === EventSource.CLOSED) {
-        // Server closed the connection; try to reconnect after a delay
-        setTimeout(function () {
-          if (_activeStreamRecipientId === recipientId) {
-            connectStream(root, recipientId);
-          }
-        }, 5000);
-      }
+    fetch(streamUrl, {
+      method: 'GET',
+      headers: streamHeaders(config),
+      signal: controller.signal,
+    }).then(function (res) {
+      if (closed || _activeStreamRecipientId !== recipientId) return;
+      if (!res.ok) throw new Error(res.statusText || 'Stream failed');
+      if (!res.body || !res.body.getReader) throw new Error('Streaming not supported');
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder();
+      return readStream(reader, decoder, '');
+    }).catch(function (err) {
+      if (closed || _activeStreamRecipientId !== recipientId || err.name === 'AbortError') return;
+      console.warn('[aftercare-text-widget] stream error:', err);
+      scheduleReconnect();
     });
   }
 
@@ -1459,9 +1514,10 @@ ${S} * { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.15) transparent; }
 /* Top bar */
 ${S} .ac-topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; background: #fff; border-bottom: 1px solid #e2e6ec; flex-shrink: 0; }
 ${S} .ac-topbar-left { font-size: 18px; font-weight: 700; color: #1a1a2e; }
-${S} .ac-topbar-settings { font-family: inherit; font-size: 13px; font-weight: 500; color: #4a6cf7; cursor: pointer; padding: 7px 14px; border: 1px solid #dde1e8; border-radius: 6px; background: #fff; transition: all 0.15s; }
-${S} .ac-topbar-settings:hover:not(:disabled) { border-color: #4a6cf7; background: #f0f3ff; }
+${S} .ac-topbar-settings { display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-size: 13px; font-weight: 600; color: #02a473; cursor: pointer; padding: 6px 14px; border: 1px solid #c8ece0; border-radius: 6px; background: #f0faf6; transition: all 0.15s; }
+${S} .ac-topbar-settings:hover:not(:disabled) { background: #e0f5ed; border-color: #02a473; }
 ${S} .ac-topbar-settings:disabled { opacity: 0.65; cursor: not-allowed; }
+${S} .ac-topbar-settings svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
 /* Product gate (ACP-only accounts: no text inbox) */
 ${S} .ac-product-gate { flex: 1; display: flex; flex-direction: column; background: #fff; min-height: 180px; }
@@ -1700,7 +1756,10 @@ ${S}.ac-mobile .ac-reply { padding: 10px 12px; }
 <!-- Aftercare top bar -->
 <div class="ac-topbar">
   <div class="ac-topbar-left">Aftercare Text</div>
-  <button type="button" class="ac-topbar-settings" id="ac-open-admin-btn">Open Aftercare.com</button>
+  <button type="button" class="ac-topbar-link" id="ac-open-admin-btn">
+    Open Aftercare.com
+    <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+  </button>
 </div>
 
 <!-- Inbox -->
