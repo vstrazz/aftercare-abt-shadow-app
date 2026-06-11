@@ -1,16 +1,21 @@
 ---
-description: After editing standalone widget scripts, sync public copies, minify, and rebuild dist via npm
+description: After editing standalone widget scripts, always rebuild dist (not just public/)
 globs: aftercare-text-widget.js,aftercare-badge-poll.js
-alwaysApply: false
+alwaysApply: true
 ---
 
 # Widget sync + minify + dist
 
-Standalone scripts (`aftercare-text-widget.js`, `aftercare-badge-poll.js`) live at the shadow-app repo root. After any edit, from `aftercare-abt-shadow-app/`:
+Standalone scripts (`aftercare-text-widget.js`, `aftercare-badge-poll.js`) live at the shadow-app repo root.
+
+**After ANY edit to these files**, from `aftercare-abt-shadow-app/` you MUST run:
 
 ```bash
-npm run sync-widget    # copies to public/*.js, writes root + public *.min.js (terser)
-npm run build          # runs sync-widget then vite build — public assets land in dist/
+npm run build
 ```
 
-Do not run terser by hand unless debugging; use `npm run sync-widget` so minified outputs stay aligned with source.
+This runs `sync-widget` (copy to `public/`, minify) and then Vite copies everything into `dist/`.
+
+**Do not stop at `npm run sync-widget` alone** — `dist/` is what gets deployed and must always be updated with the change.
+
+Do not run terser by hand unless debugging.

@@ -1,5 +1,5 @@
 /**
- * Aftercare Text Widget V1.1.5
+ * Aftercare Text Widget V1.1.6
  * =====================
  * Self-contained script that renders the Aftercare Text inbox
  * inside a Shadow DOM root on any host page.
@@ -370,7 +370,7 @@
     if (msgType === 'admin-note' || msgType === 'admin_note') {
       var flag = document.createElement('div');
       flag.className = 'ac-flag';
-      flag.textContent = '\u2726 ' + (msg.text_message || msg.textMessage || '');
+      flag.textContent = '\u2726 ' + decodeHtmlEntities(msg.text_message || msg.textMessage || '');
       msgsEl.appendChild(flag);
       msgsEl.scrollTop = msgsEl.scrollHeight;
       return;
@@ -385,8 +385,16 @@
     var hasMod = msg.moderation && msg.moderation.length > 0;
     var flaggedByStatus = messageNeedsAttention(msg);
     var flaggedByLegacy = !msg.moderated && !msg.admin_viewed && hasMod;
+    var recipientFlagged = msg.recipient_needs_attention === true
+      || msg.recipient_needs_attention === 1
+      || msg.recipient_needs_attention === '1'
+      || msg.recipient_needs_attention === 'true'
+      || msg.recipientNeedsAttention === true
+      || msg.recipientNeedsAttention === 1
+      || msg.recipientNeedsAttention === '1'
+      || msg.recipientNeedsAttention === 'true';
     var flagged = (msgType === 'incoming' && (flaggedByStatus || flaggedByLegacy)) ? ' flagged' : '';
-    if (flagged && dir === 'in') {
+    if ((flagged || recipientFlagged) && dir === 'in') {
       msgsEl.dataset.recipientNeedsAttention = '1';
     }
 
@@ -412,6 +420,10 @@
       ensureOnlyLastFlaggedMessage(msgsEl);
       scrollMessagesToBottom(msgsEl);
       updateConversationPreview(root, recipientId, mergedBody, rawDate);
+      if (flagged || recipientFlagged) {
+        markConversationNeedsAttention(root, recipientId);
+      }
+      rebuildConversationSections(root);
       return;
     }
 
@@ -448,7 +460,7 @@
     scrollMessagesToBottom(msgsEl);
 
     updateConversationPreview(root, recipientId, body, rawDate);
-    if (dir === 'in') {
+    if (flagged) {
       markConversationNeedsAttention(root, recipientId);
     }
     rebuildConversationSections(root);
@@ -636,6 +648,57 @@
       var ct = res.headers.get('content-type');
       return ct && ct.indexOf('application/json') !== -1 ? res.json() : res.text();
     });
+  }
+
+  function apiPatch(config, path, body) {
+    if (!config || !config.apiBase) return Promise.reject(new Error('API base URL not configured'));
+    var base = config.apiBase.replace(/\/$/, '');
+    var pathPart = path.replace(/^\//, '');
+    var url = base + '/' + pathPart;
+    return fetch(url, {
+      method: 'PATCH',
+      headers: jsonHeaders(config),
+      body: JSON.stringify(body || {}),
+    }).then(function (res) {
+      if (!res.ok) throw new Error(res.statusText || 'Request failed');
+      var ct = res.headers.get('content-type');
+      return ct && ct.indexOf('application/json') !== -1 ? res.json() : res.text();
+    });
+  }
+
+  function parseUnreadCountResponse(rawCount) {
+    if (typeof rawCount === 'number') return rawCount;
+    if (typeof rawCount === 'string' && !isNaN(parseInt(rawCount, 10))) {
+      return parseInt(rawCount, 10);
+    }
+    if (rawCount != null && typeof rawCount === 'object') {
+      var inner = rawCount.data != null ? rawCount.data : rawCount;
+      if (inner.total_unread != null) return inner.total_unread;
+      if (inner.count != null) return inner.count;
+      if (inner.unreadCount != null) return inner.unreadCount;
+      if (typeof inner === 'number') return inner;
+    }
+    return 0;
+  }
+
+  function markAsRead(config, recipientId) {
+    var recipientIdNum = parseInt(recipientId, 10);
+    if (isNaN(recipientIdNum)) {
+      return Promise.reject(new Error('Invalid recipient id'));
+    }
+    return apiPatch(config, WIDGET_PATH_PREFIX + '/text-messages/mark-read', {
+      recipient_id: recipientIdNum,
+    });
+  }
+
+  function refreshUnreadBadge(root, config) {
+    return apiGet(config, WIDGET_PATH_PREFIX + '/text-messages/unread-count', { days_back: 100000 })
+      .then(function (rawCount) {
+        updateNavBadge(parseUnreadCountResponse(rawCount));
+      })
+      .catch(function (err) {
+        console.warn('[aftercare-text-widget] unread-count refresh failed:', err);
+      });
   }
 
   function apiPostFormData(config, path, formData) {
@@ -945,20 +1008,7 @@
     ]).then(function (results) {
       var raw = results[0];
       var conversations = (raw.data != null) ? raw.data : ((raw.conversations != null) ? raw.conversations : (Array.isArray(raw) ? raw : []));
-      var rawCount = results[1];
-      var unreadCount = 0;
-      if (typeof rawCount === 'number') {
-        unreadCount = rawCount;
-      } else if (typeof rawCount === 'string' && !isNaN(parseInt(rawCount, 10))) {
-        unreadCount = parseInt(rawCount, 10);
-      } else if (rawCount != null && typeof rawCount === 'object') {
-        var inner = rawCount.data != null ? rawCount.data : rawCount;
-        unreadCount = inner.total_unread != null ? inner.total_unread
-          : inner.count != null ? inner.count
-          : inner.unreadCount != null ? inner.unreadCount
-          : typeof inner === 'number' ? inner
-          : 0;
-      }
+      var unreadCount = parseUnreadCountResponse(results[1]);
       renderConversationList(root, listEl, conversations, unreadCount);
       updateNavBadge(unreadCount);
       bindListEvents(root);
@@ -1043,7 +1093,7 @@
 
   function linkifyMessageText(text) {
     if (text == null || text === '') return '';
-    var str = String(text);
+    var str = decodeHtmlEntities(String(text));
     var result = '';
     var lastIndex = 0;
     var match;
@@ -1185,6 +1235,7 @@
     if (!config.apiBase) return;
 
     root._scheduleLoadId = (root._scheduleLoadId || 0) + 1;
+    var loadId = root._scheduleLoadId;
 
     var msgsEl = root.querySelector('.ac-msgs');
     if (msgsEl) {
@@ -1193,10 +1244,25 @@
 
     apiGet(config, WIDGET_PATH_PREFIX + '/text-messages/thread/' + encodeURIComponent(recipientId), { order: 'asc' })
       .then(function (data) {
+        if (loadId !== root._scheduleLoadId) return;
         renderThread(root, data, recipientId);
         connectStream(root, recipientId);
+
+        var inner = data.data || data;
+        var threadUnread = inner.unread_count != null ? inner.unread_count : (inner.unreadCount != null ? inner.unreadCount : 0);
+        if (threadUnread > 0) {
+          markAsRead(config, recipientId)
+            .then(function () {
+              if (loadId !== root._scheduleLoadId) return;
+              refreshUnreadBadge(root, config);
+            })
+            .catch(function (err) {
+              console.warn('[aftercare-text-widget] mark-read failed:', err);
+            });
+        }
       })
       .catch(function () {
+        if (loadId !== root._scheduleLoadId) return;
         if (msgsEl) {
           msgsEl.innerHTML = '<div class="ac-sys">Unable to load messages.</div>';
         }
