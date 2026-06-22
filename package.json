@@ -8,7 +8,7 @@
     "build": "vite build",
     "watch": "vite build --watch",
     "preview": "vite preview",
-    "sync-widget": "cp aftercare-text-widget.js public/aftercare-text-widget.js && cp aftercare-badge-poll.js public/aftercare-badge-poll.js && npx terser aftercare-text-widget.js -o aftercare-text-widget.min.js --compress --mangle --comments \"/Aftercare Text Widget/\" && npx terser aftercare-badge-poll.js -o aftercare-badge-poll.min.js --compress --mangle --comments \"/Aftercare Badge Poll/\" && cp aftercare-text-widget.min.js public/aftercare-text-widget.min.js && cp aftercare-badge-poll.min.js public/aftercare-badge-poll.min.js"
+    "sync-widget": "node scripts/inject-widget-env.mjs && cp aftercare-badge-poll.js public/aftercare-badge-poll.js && npx terser public/aftercare-text-widget.js -o aftercare-text-widget.min.js --compress --mangle --comments \"/Aftercare Text Widget/\" && npx terser aftercare-badge-poll.js -o aftercare-badge-poll.min.js --compress --mangle --comments \"/Aftercare Badge Poll/\" && cp aftercare-text-widget.min.js public/aftercare-text-widget.min.js && cp aftercare-badge-poll.min.js public/aftercare-badge-poll.min.js"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.21",

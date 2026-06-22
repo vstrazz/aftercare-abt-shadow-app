@@ -2,8 +2,9 @@
  * Inbox service for the text messaging API.
  * Base URL from VITE_API_BASE_URL; paths match the API:
  *   GET /recipients, GET /conversations, GET /thread/:recipientId,
- *   PATCH /mark-read, GET /unread-count, GET /stream/:recipientId,
+ *   PATCH /mark-read, GET /unread-count,
  *   POST /thread/:recipientId, POST /stop/:recipientId
+ * Realtime updates use Firebase RTDB inbox signals (not SSE).
  */
 
 import { apiGet, apiPost, apiPatch } from '../api/client'
@@ -59,19 +60,6 @@ export async function markRead(body) {
  */
 export async function getUnreadCount() {
   return apiGet('unread-count')
-}
-
-/**
- * GET /stream/:recipientId — SSE stream for real-time message notifications.
- * Returns an EventSource; caller must call .close() when done.
- * @param {string} recipientId
- * @returns {EventSource}
- */
-export function openStream(recipientId) {
-  if (!recipientId) throw new Error('recipientId is required')
-  const base = getBaseUrl()
-  const url = `${base}/stream/${encodeURIComponent(recipientId)}`
-  return new EventSource(url)
 }
 
 /**

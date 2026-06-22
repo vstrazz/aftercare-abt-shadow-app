@@ -1,5 +1,5 @@
 /**
- * Aftercare Text Widget V1.1.6
+ * Aftercare Text Widget V1.2.0
  * =====================
  * Self-contained script that renders the Aftercare Text inbox
  * inside a Shadow DOM root on any host page.
@@ -18,6 +18,9 @@
  *     the script will update it with the current attention count.
  *   - Set data-api-key on #aftercare-text-root (or window.AFTERCARE_CONFIG.apiKey)
  *     to match API_CLIENT_KEYS on the API when key enforcement is enabled.
+ *
+ * Realtime inbox updates use FIREBASE_DB_URL, injected when you run npm run sync-widget
+ * (or npm run build). AFTERCARE_CONFIG.firebaseDbUrl can override for local dev.
  */
 (function () {
   'use strict';
@@ -29,6 +32,8 @@
   const DEFAULT_API_KEY = '';
   // account_api_key refers to the tukios_api_key stored on the accounts table.
   const DEFAULT_ACCOUNT_API_KEY = '1';
+  // Injected from FIREBASE_DB_URL via scripts/inject-widget-env.mjs (npm run sync-widget).
+  const DEFAULT_FIREBASE_DB_URL = '@@FIREBASE_DB_URL@@';
   // All widget calls go through the per-account auth wrapper mounted at
   // /api/widget/* on the API. The underlying handlers (text-messages,
   // aftercare-families) are re-mounted there with widgetAuth, which
@@ -37,15 +42,9 @@
   // (e.g. /api/text-messages/*) remain unchanged for other consumers.
   const WIDGET_PATH_PREFIX = 'widget';
 
-  var _activeStream = null;
-  var _activeStreamRecipientId = null;
-
-  function streamHeaders(config) {
-    var h = { Accept: 'text/event-stream' };
-    if (config && config.apiKey) h['X-API-Key'] = config.apiKey;
-    if (config && config.account_api_key) h['Authorization'] = 'Bearer ' + config.account_api_key;
-    return h;
-  }
+  var _inboxSignal = null;
+  var _inboxSignalDebounce = null;
+  var _lastInboxSignalKey = null;
 
   function parseSSEBuffer(buffer) {
     var events = [];
@@ -73,36 +72,72 @@
     return { events: events, remainder: remainder };
   }
 
-  function connectStream(root, recipientId) {
-    disconnectStream();
+  function parseInboxSignalPayload(rawData) {
+    if (!rawData || rawData === 'null') return null;
+    try {
+      var envelope = JSON.parse(rawData);
+      var payload = envelope && envelope.data != null ? envelope.data : envelope;
+      if (!payload || typeof payload !== 'object') return null;
+      return {
+        recipientId: payload.recipientId != null ? payload.recipientId : payload.recipient_id,
+        type: payload.type || '',
+        updatedAt: payload.updatedAt != null ? payload.updatedAt : payload.updated_at,
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function scheduleInboxRefresh(root, signal) {
+    var signalKey = String(signal.updatedAt || '') + ':' + String(signal.type || '') + ':' +
+      String(signal.recipientId != null ? signal.recipientId : '');
+    if (signalKey === _lastInboxSignalKey) return;
+    _lastInboxSignalKey = signalKey;
+
+    clearTimeout(_inboxSignalDebounce);
+    _inboxSignalDebounce = setTimeout(function () {
+      var config = getConfig(root);
+      refreshConversationList(root);
+      refreshUnreadBadge(root, config);
+      var active = root.querySelector('.ac-msg.active');
+      var activeId = active && (active.dataset.recipientId || active.dataset.id);
+      if (!activeId) return;
+      var signalRid = signal.recipientId != null ? String(signal.recipientId) : null;
+      if (!signalRid || signalRid === String(activeId)) {
+        refreshThread(root, activeId);
+      }
+    }, 300);
+  }
+
+  function connectInboxSignal(root, accountId) {
+    disconnectInboxSignal();
 
     var config = getConfig(root);
-    if (!config.apiBase || !config.account_api_key) return;
+    if (!accountId || !config.firebaseDbUrl || config.firebaseDbUrl === '@@FIREBASE_DB_URL@@') return;
 
-    var streamUrl = config.apiBase.replace(/\/$/, '') + '/' + WIDGET_PATH_PREFIX + '/text-messages/stream/' + encodeURIComponent(recipientId);
+    var streamUrl = config.firebaseDbUrl.replace(/\/$/, '') +
+      '/signals/' + encodeURIComponent(String(accountId)) + '/inbox.json';
     var controller = new AbortController();
     var closed = false;
+    var boundAccountId = accountId;
 
-    _activeStream = {
+    _inboxSignal = {
       close: function () {
         closed = true;
         controller.abort();
       },
     };
-    _activeStreamRecipientId = recipientId;
 
     function scheduleReconnect() {
-      if (closed || _activeStreamRecipientId !== recipientId) return;
+      if (closed) return;
       setTimeout(function () {
-        if (!closed && _activeStreamRecipientId === recipientId) {
-          connectStream(root, recipientId);
-        }
+        if (!closed) connectInboxSignal(root, boundAccountId);
       }, 5000);
     }
 
     function readStream(reader, decoder, buffer) {
       return reader.read().then(function (result) {
-        if (closed || _activeStreamRecipientId !== recipientId) return;
+        if (closed) return;
         if (result.done) {
           scheduleReconnect();
           return;
@@ -112,10 +147,10 @@
         buffer = parsed.remainder;
         for (var i = 0; i < parsed.events.length; i++) {
           var evt = parsed.events[i];
-          if (evt.event !== 'message_received') continue;
-          try {
-            appendStreamMessage(root, JSON.parse(evt.data), recipientId);
-          } catch (e) { /* ignore malformed event */ }
+          if (evt.event === 'keep-alive' || evt.event === 'cancel') continue;
+          if (evt.event !== 'put' && evt.event !== 'patch') continue;
+          var signal = parseInboxSignalPayload(evt.data);
+          if (signal) scheduleInboxRefresh(root, signal);
         }
         return readStream(reader, decoder, buffer);
       });
@@ -123,28 +158,80 @@
 
     fetch(streamUrl, {
       method: 'GET',
-      headers: streamHeaders(config),
+      headers: { Accept: 'text/event-stream' },
       signal: controller.signal,
     }).then(function (res) {
-      if (closed || _activeStreamRecipientId !== recipientId) return;
-      if (!res.ok) throw new Error(res.statusText || 'Stream failed');
+      if (closed) return;
+      if (!res.ok) throw new Error(res.statusText || 'Inbox signal stream failed');
       if (!res.body || !res.body.getReader) throw new Error('Streaming not supported');
-      var reader = res.body.getReader();
-      var decoder = new TextDecoder();
-      return readStream(reader, decoder, '');
+      return readStream(res.body.getReader(), new TextDecoder(), '');
     }).catch(function (err) {
-      if (closed || _activeStreamRecipientId !== recipientId || err.name === 'AbortError') return;
-      console.warn('[aftercare-text-widget] stream error:', err);
+      if (closed || err.name === 'AbortError') return;
+      console.warn('[aftercare-text-widget] inbox signal error:', err);
       scheduleReconnect();
     });
   }
 
-  function disconnectStream() {
-    if (_activeStream) {
-      _activeStream.close();
-      _activeStream = null;
+  function disconnectInboxSignal() {
+    if (_inboxSignalDebounce) {
+      clearTimeout(_inboxSignalDebounce);
+      _inboxSignalDebounce = null;
     }
-    _activeStreamRecipientId = null;
+    _lastInboxSignalKey = null;
+    if (_inboxSignal) {
+      _inboxSignal.close();
+      _inboxSignal = null;
+    }
+  }
+
+  function stripApiTimestamp(raw) {
+    if (raw == null || raw === '') return '';
+    if (raw instanceof Date) {
+      if (isNaN(raw.getTime())) return '';
+      return stripApiTimestamp(raw.toISOString());
+    }
+    var s = String(raw).trim();
+    return s.replace(/\.\d{3}Z?$/, '').replace(/Z$/, '');
+  }
+
+  function parseWallClockDate(raw) {
+    if (!raw) return new Date(NaN);
+    if (raw instanceof Date) return raw;
+    var s = stripApiTimestamp(raw);
+    if (!s) return new Date(NaN);
+    var m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+    if (m) {
+      return new Date(
+        parseInt(m[1], 10),
+        parseInt(m[2], 10) - 1,
+        parseInt(m[3], 10),
+        parseInt(m[4] || '0', 10),
+        parseInt(m[5] || '0', 10),
+        parseInt(m[6] || '0', 10)
+      );
+    }
+    return new Date(s);
+  }
+
+  function wallClockNowEastern() {
+    var parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date());
+    var get = function (type) {
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].type === type) return parts[i].value;
+      }
+      return '00';
+    };
+    return get('year') + '-' + get('month') + '-' + get('day') + 'T' +
+      get('hour') + ':' + get('minute') + ':' + get('second');
   }
 
   function extractMessageTimestamp(msg) {
@@ -163,29 +250,14 @@
   }
 
   function formatMessageMeta(rawDate) {
-    if (!rawDate) return '';
-    var s = typeof rawDate === 'string' ? rawDate.trim() : '';
-    var rawParts = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
-    if (rawParts) {
-      // Preserve API clock time exactly as supplied (no timezone conversion).
-      var asCalendarClock = new Date(Date.UTC(
-        parseInt(rawParts[1], 10),
-        parseInt(rawParts[2], 10) - 1,
-        parseInt(rawParts[3], 10),
-        parseInt(rawParts[4], 10),
-        parseInt(rawParts[5], 10)
-      ));
-      return asCalendarClock.toLocaleString([], {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        timeZone: 'UTC',
-      });
-    }
-    var d = new Date(rawDate);
+    var d = parseWallClockDate(rawDate);
     if (isNaN(d.getTime())) return '';
-    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    return d.toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
   }
 
   function formatCalendarDate(raw) {
@@ -249,17 +321,7 @@
     bubble.dataset.messageReaction = reaction;
   }
 
-  function isUnchangedStreamUpdate(bubble, body, meta, image, reaction, flagged) {
-    if (!bubble) return false;
-    var sameBody = (bubble.dataset.messageBody || '') === (body || '');
-    var sameMeta = (bubble.dataset.messageMeta || '') === (meta || '');
-    var sameImage = (bubble.dataset.messageImage || '') === (image || '');
-    var sameReaction = (bubble.dataset.messageReaction || '') === (reaction || '');
-    var sameFlagged = bubble.classList.contains('flagged') === !!flagged;
-    return sameBody && sameMeta && sameImage && sameReaction && sameFlagged;
-  }
-
-  function conversationNeedsAttention(c) {
+  function setBubbleContent(bubble, body, meta, image, reaction) {
     if (!c || typeof c !== 'object') return false;
     var last = c.last_message || c.lastMessage || {};
     var direct = c.needs_attention;
@@ -359,126 +421,6 @@
       if (bubble === lastAttention) bubble.classList.add('flagged');
       else bubble.classList.remove('flagged');
     });
-  }
-
-  function appendStreamMessage(root, msg, recipientId) {
-    var msgsEl = root.querySelector('.ac-msgs');
-    if (!msgsEl) return;
-
-    var msgType = msg.message_type || msg.messageType || '';
-
-    if (msgType === 'admin-note' || msgType === 'admin_note') {
-      var flag = document.createElement('div');
-      flag.className = 'ac-flag';
-      flag.textContent = '\u2726 ' + decodeHtmlEntities(msg.text_message || msg.textMessage || '');
-      msgsEl.appendChild(flag);
-      msgsEl.scrollTop = msgsEl.scrollHeight;
-      return;
-    }
-
-    var dir = (msgType === 'outgoing' || msgType === 'outgoing_campaign') ? 'out' : 'in';
-    var body = msg.text_message != null ? msg.text_message : (msg.textMessage != null ? msg.textMessage : (msg.body != null ? msg.body : ''));
-    var rawDate = extractMessageTimestamp(msg);
-    var meta = formatMessageMeta(rawDate);
-    var messageId = extractMessageId(msg);
-
-    var hasMod = msg.moderation && msg.moderation.length > 0;
-    var flaggedByStatus = messageNeedsAttention(msg);
-    var flaggedByLegacy = !msg.moderated && !msg.admin_viewed && hasMod;
-    var recipientFlagged = msg.recipient_needs_attention === true
-      || msg.recipient_needs_attention === 1
-      || msg.recipient_needs_attention === '1'
-      || msg.recipient_needs_attention === 'true'
-      || msg.recipientNeedsAttention === true
-      || msg.recipientNeedsAttention === 1
-      || msg.recipientNeedsAttention === '1'
-      || msg.recipientNeedsAttention === 'true';
-    var flagged = (msgType === 'incoming' && (flaggedByStatus || flaggedByLegacy)) ? ' flagged' : '';
-    if ((flagged || recipientFlagged) && dir === 'in') {
-      msgsEl.dataset.recipientNeedsAttention = '1';
-    }
-
-    var image = extractMessageImage(msg);
-
-    var existing = messageId ? msgsEl.querySelector('.ac-bubble[data-message-id="' + escapeAttr(messageId) + '"]') : null;
-    if (existing) {
-      var mergedBody = body || existing.dataset.messageBody || '';
-      var mergedMeta = meta || existing.dataset.messageMeta || '';
-      var mergedImage = hasImageField(msg)
-        ? (extractMessageImage(msg) || '')
-        : (existing.dataset.messageImage || '');
-      var mergedReaction = hasReactionField(msg)
-        ? extractMessageReaction(msg)
-        : (existing.dataset.messageReaction || '');
-      if (isUnchangedStreamUpdate(existing, mergedBody, mergedMeta, mergedImage, mergedReaction, flagged)) {
-        return;
-      }
-      setBubbleContent(existing, mergedBody, mergedMeta, mergedImage, mergedReaction);
-      existing.dataset.needsAttention = flagged ? '1' : '0';
-      if (flagged) existing.classList.add('flagged');
-      else existing.classList.remove('flagged');
-      ensureOnlyLastFlaggedMessage(msgsEl);
-      scrollMessagesToBottom(msgsEl);
-      updateConversationPreview(root, recipientId, mergedBody, rawDate);
-      if (flagged || recipientFlagged) {
-        markConversationNeedsAttention(root, recipientId);
-      }
-      rebuildConversationSections(root);
-      return;
-    }
-
-    var bubble = document.createElement('div');
-    bubble.className = 'ac-bubble ' + dir + flagged;
-    bubble.dataset.needsAttention = flagged ? '1' : '0';
-    if (messageId) {
-      bubble.dataset.messageId = messageId;
-    }
-    var optimistic = dir === 'out' ? msgsEl.querySelector('.ac-bubble.out[data-optimistic]') : null;
-    if (!body && optimistic && optimistic.dataset.messageBody) {
-      body = optimistic.dataset.messageBody;
-    }
-    if (!hasImageField(msg) && optimistic && optimistic.dataset.messageImage) {
-      image = optimistic.dataset.messageImage;
-    }
-    if (!meta && optimistic) {
-      var optimisticMeta = optimistic.querySelector('.ac-meta');
-      if (optimisticMeta && optimisticMeta.textContent) {
-        meta = optimisticMeta.textContent;
-      }
-    }
-    setBubbleContent(bubble, body, meta, image, extractMessageReaction(msg));
-
-    // If this is an outgoing message, check for an optimistic placeholder we added
-    // immediately in sendMessage. Replace it with the confirmed server message instead
-    // of appending a duplicate.
-    if (optimistic) {
-      msgsEl.replaceChild(bubble, optimistic);
-    } else {
-      msgsEl.appendChild(bubble);
-    }
-    ensureOnlyLastFlaggedMessage(msgsEl);
-    scrollMessagesToBottom(msgsEl);
-
-    updateConversationPreview(root, recipientId, body, rawDate);
-    if (flagged) {
-      markConversationNeedsAttention(root, recipientId);
-    }
-    rebuildConversationSections(root);
-  }
-
-  function updateConversationPreview(root, recipientId, text, rawDate) {
-    var item = root.querySelector('.ac-msg[data-recipient-id="' + recipientId + '"]')
-      || root.querySelector('.ac-msg[data-id="' + recipientId + '"]');
-    if (!item) return;
-
-    var preview = item.querySelector('.ac-msg-preview');
-    if (preview && text) {
-      preview.textContent = text.length > 80 ? text.substring(0, 80) + '…' : text;
-    }
-    var dateEl = item.querySelector('.ac-msg-date');
-    if (dateEl && rawDate) {
-      dateEl.textContent = formatDate(rawDate);
-    }
   }
 
   function isCompactViewport() {
@@ -592,6 +534,7 @@
       // account_api_key refers to the tukios_api_key stored on the accounts table.
       account_api_key: (hostEl && hostEl.dataset && hostEl.dataset.accountApiKey) || (globalConfig && globalConfig.account_api_key) || DEFAULT_ACCOUNT_API_KEY,
       apiKey: (hostEl && hostEl.dataset && hostEl.dataset.apiKey) || (globalConfig && (globalConfig.apiKey || globalConfig.api_key)) || DEFAULT_API_KEY,
+      firebaseDbUrl: (globalConfig && globalConfig.firebaseDbUrl) || DEFAULT_FIREBASE_DB_URL,
     };
   }
 
@@ -664,6 +607,15 @@
       var ct = res.headers.get('content-type');
       return ct && ct.indexOf('application/json') !== -1 ? res.json() : res.text();
     });
+  }
+
+  function parseAccountIdFromUnreadResponse(rawCount) {
+    if (rawCount != null && typeof rawCount === 'object') {
+      var inner = rawCount.data != null ? rawCount.data : rawCount;
+      if (inner && inner.account_id != null) return inner.account_id;
+      if (inner && inner.accountId != null) return inner.accountId;
+    }
+    return null;
   }
 
   function parseUnreadCountResponse(rawCount) {
@@ -744,7 +696,7 @@
   function render(hostEl) {
     if (hostEl.dataset.aftercareInit) return;
     hostEl.dataset.aftercareInit = 'true';
-    disconnectStream();
+    disconnectInboxSignal();
 
     var shadow = hostEl.attachShadow({ mode: 'open' });
 
@@ -990,41 +942,64 @@
     clearScheduleList(root);
   }
 
-  function loadConversationList(root) {
+  function refreshConversationList(root) {
+    return loadConversationList(root, { silent: true });
+  }
+
+  function loadConversationList(root, opts) {
+    opts = opts || {};
+    var silent = !!opts.silent;
     var config = getConfig(root);
     var listEl = root.querySelector('.ac-list-msgs');
-    if (!listEl) return;
+    if (!listEl) return Promise.resolve();
 
-    listEl.innerHTML = '<div class="ac-list-loading" style="padding:24px;text-align:center;color:#8b8fa3;font-size:14px;">Loading conversations…</div>';
+    var activeBefore = root.querySelector('.ac-msg.active');
+    var activeIdBefore = activeBefore && (activeBefore.dataset.recipientId || activeBefore.dataset.id);
 
-    // account_api_key (the tukios_api_key stored on the accounts table) is sent via the
-    // Authorization: Bearer <account_api_key> header by jsonHeaders(config), not as a query param.
+    if (!silent) {
+      listEl.innerHTML = '<div class="ac-list-loading" style="padding:24px;text-align:center;color:#8b8fa3;font-size:14px;">Loading conversations…</div>';
+    }
+
     var params = { limit: 50, offset: 0, days_back: 100000 };
     var count_params = { days_back: 100000 };
 
-    Promise.all([
+    return Promise.all([
       apiGet(config, WIDGET_PATH_PREFIX + '/text-messages/conversations', params).catch(function () { return { conversations: [] }; }),
       apiGet(config, WIDGET_PATH_PREFIX + '/text-messages/unread-count', count_params).catch(function () { return { count: 0 }; }),
     ]).then(function (results) {
       var raw = results[0];
       var conversations = (raw.data != null) ? raw.data : ((raw.conversations != null) ? raw.conversations : (Array.isArray(raw) ? raw : []));
       var unreadCount = parseUnreadCountResponse(results[1]);
+      var accountId = parseAccountIdFromUnreadResponse(results[1]);
+      if (accountId && String(accountId) !== String(root._accountId)) {
+        root._accountId = accountId;
+        connectInboxSignal(root, accountId);
+      }
       renderConversationList(root, listEl, conversations, unreadCount);
       updateNavBadge(unreadCount);
       bindListEvents(root);
-      if (isCompactViewport()) {
-        setMobileView(root, 'list');
+      if (activeIdBefore) {
+        var restored = root.querySelector('.ac-msg[data-recipient-id="' + activeIdBefore + '"]')
+          || root.querySelector('.ac-msg[data-id="' + activeIdBefore + '"]');
+        if (restored) restored.classList.add('active');
       }
-      var firstActive = root.querySelector('.ac-msg.active');
-      if (firstActive) {
-        var rid = firstActive.dataset.recipientId || firstActive.dataset.id;
-        if (rid) loadThread(root, rid);
-      } else {
-        resetConvoPanelForNoSelection(root);
+      if (isCompactViewport()) {
+        if (!silent) setMobileView(root, 'list');
+      }
+      if (!silent) {
+        var firstActive = root.querySelector('.ac-msg.active');
+        if (firstActive) {
+          var rid = firstActive.dataset.recipientId || firstActive.dataset.id;
+          if (rid) loadThread(root, rid);
+        } else {
+          resetConvoPanelForNoSelection(root);
+        }
       }
     }).catch(function () {
-      listEl.innerHTML = '<div class="ac-list-loading" style="padding:24px;text-align:center;color:#8b8fa3;font-size:14px;">Unable to load conversations. Check data-api-base and network.</div>';
-      resetConvoPanelForNoSelection(root);
+      if (!silent) {
+        listEl.innerHTML = '<div class="ac-list-loading" style="padding:24px;text-align:center;color:#8b8fa3;font-size:14px;">Unable to load conversations. Check data-api-base and network.</div>';
+        resetConvoPanelForNoSelection(root);
+      }
     });
   }
 
@@ -1127,27 +1102,12 @@
   }
 
   function parseDisplayDate(raw) {
-    if (!raw) return new Date(NaN);
-    if (raw instanceof Date) return raw;
-    if (typeof raw !== 'string') return new Date(raw);
-    var s = raw.trim();
-    var m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?/);
-    if (m) {
-      return new Date(
-        parseInt(m[1], 10),
-        parseInt(m[2], 10) - 1,
-        parseInt(m[3], 10),
-        parseInt(m[4] || '0', 10),
-        parseInt(m[5] || '0', 10),
-        parseInt(m[6] || '0', 10)
-      );
-    }
-    return new Date(raw);
+    return parseWallClockDate(raw);
   }
 
   function formatDate(raw) {
     if (!raw) return '';
-    var d = parseDisplayDate(raw);
+    var d = parseWallClockDate(raw);
     if (isNaN(d.getTime())) return '';
     var now = new Date();
     var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -1230,6 +1190,26 @@
     rebuildConversationSections(root);
   }
 
+  function refreshThread(root, recipientId) {
+    var config = getConfig(root);
+    if (!config.apiBase || !recipientId) return Promise.resolve();
+
+    var active = root.querySelector('.ac-msg.active');
+    var activeId = active && (active.dataset.recipientId || active.dataset.id);
+    if (String(activeId) !== String(recipientId)) return Promise.resolve();
+
+    return apiGet(config, WIDGET_PATH_PREFIX + '/text-messages/thread/' + encodeURIComponent(recipientId), { order: 'asc' })
+      .then(function (data) {
+        var stillActive = root.querySelector('.ac-msg.active');
+        var stillId = stillActive && (stillActive.dataset.recipientId || stillActive.dataset.id);
+        if (String(stillId) !== String(recipientId)) return;
+        renderThread(root, data, recipientId);
+      })
+      .catch(function (err) {
+        console.warn('[aftercare-text-widget] thread refresh failed:', err);
+      });
+  }
+
   function loadThread(root, recipientId) {
     var config = getConfig(root);
     if (!config.apiBase) return;
@@ -1246,7 +1226,6 @@
       .then(function (data) {
         if (loadId !== root._scheduleLoadId) return;
         renderThread(root, data, recipientId);
-        connectStream(root, recipientId);
 
         var inner = data.data || data;
         var threadUnread = inner.unread_count != null ? inner.unread_count : (inner.unreadCount != null ? inner.unreadCount : 0);
@@ -1525,8 +1504,7 @@
 
     var msgsEl = root.querySelector('.ac-msgs');
     if (msgsEl) {
-      var now = new Date();
-      var meta = formatMessageMeta(now.toISOString());
+      var meta = formatMessageMeta(wallClockNowEastern());
       var bubble = document.createElement('div');
       bubble.className = 'ac-bubble out';
       setBubbleContent(bubble, message, meta, imageUrl, '');
@@ -1542,11 +1520,30 @@
     if (imageUrl) body.image = imageUrl;
 
     apiPost(config, WIDGET_PATH_PREFIX + '/text-messages/thread/' + encodeURIComponent(recipientId), body)
-      .then(function () {
+      .then(function (result) {
         if (sendBtn) {
           sendBtn.disabled = false;
           if (sendBtnLabel) sendBtnLabel.textContent = 'Send';
         }
+        var payload = result && result.data != null ? result.data : result;
+        var sentAt = payload && (payload.sent_at != null ? payload.sent_at : payload.sentAt);
+        var threadId = payload && (payload.thread_id != null ? payload.thread_id : payload.threadId);
+        if (msgsEl) {
+          var optimistic = msgsEl.querySelector('.ac-bubble.out[data-optimistic]');
+          if (optimistic) {
+            if (sentAt) {
+              var confirmedMeta = formatMessageMeta(sentAt);
+              var confirmedBody = optimistic.dataset.messageBody || message;
+              var confirmedImage = optimistic.dataset.messageImage || imageUrl || '';
+              setBubbleContent(optimistic, confirmedBody, confirmedMeta, confirmedImage, '');
+              optimistic.removeAttribute('data-optimistic');
+              if (threadId != null) optimistic.dataset.messageId = String(threadId);
+            } else {
+              refreshThread(root, recipientId);
+            }
+          }
+        }
+        refreshConversationList(root);
       })
       .catch(function () {
         if (sendBtn) {

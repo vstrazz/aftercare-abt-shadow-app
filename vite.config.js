@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { execSync } from 'child_process'
 import { resolve } from 'path'
@@ -32,9 +32,16 @@ function syncWidgetPlugin() {
   }
 }
 
-export default defineConfig({
-  plugins: [react(), syncWidgetPlugin()],
-  server: {
-    port: 3000
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+
+  return {
+    plugins: [react(), syncWidgetPlugin()],
+    define: {
+      'import.meta.env.FIREBASE_DB_URL': JSON.stringify(env.FIREBASE_DB_URL ?? ''),
+    },
+    server: {
+      port: 3000
+    }
   }
 })
