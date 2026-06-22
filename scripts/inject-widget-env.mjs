@@ -1,6 +1,6 @@
 /**
- * Injects FIREBASE_DB_URL from .env into aftercare-text-widget.js for public/ + min builds.
- * Source keeps the @@FIREBASE_DB_URL@@ placeholder; deployed copies get the real URL.
+ * Injects .env values into aftercare-text-widget.js for public/ + min builds.
+ * Source keeps @@PLACEHOLDER@@ tokens; deployed copies get real values.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
@@ -29,24 +29,50 @@ function loadEnvFile(filePath) {
 loadEnvFile(resolve(root, '.env'));
 loadEnvFile(resolve(root, '.env.local'));
 
-const PLACEHOLDER = '@@FIREBASE_DB_URL@@';
-const firebaseDbUrl = process.env.FIREBASE_DB_URL || '';
+function normalizeApiBase(raw) {
+  const url = typeof raw === 'string' ? raw.trim() : '';
+  if (!url) return '';
+  return url.endsWith('/') ? url : url + '/';
+}
+
+function normalizeFirebaseDbUrl(raw) {
+  const url = typeof raw === 'string' ? raw.trim().replace(/\/$/, '') : '';
+  if (!url) return '';
+  if (/herokuapp\.com/i.test(url)) {
+    console.warn(
+      '[inject-widget-env] FIREBASE_DB_URL looks like an API URL, not Firebase RTDB; skipping',
+    );
+    return '';
+  }
+  return url;
+}
+
+const replacements = {
+  '@@VITE_API_BASE_URL@@': normalizeApiBase(
+    process.env.VITE_API_BASE_URL ||
+      'https://aftercare-app-api-18edbb932ed8.herokuapp.com/api',
+  ),
+  '@@VITE_API_KEY@@': process.env.VITE_API_KEY || '',
+  '@@FIREBASE_DB_URL@@': normalizeFirebaseDbUrl(process.env.FIREBASE_DB_URL || ''),
+};
 
 const sourcePath = resolve(root, 'aftercare-text-widget.js');
 const publicDir = resolve(root, 'public');
 mkdirSync(publicDir, { recursive: true });
 
-const source = readFileSync(sourcePath, 'utf8');
-if (!source.includes(PLACEHOLDER)) {
-  console.warn('[inject-widget-env] Placeholder not found in aftercare-text-widget.js');
+let injected = readFileSync(sourcePath, 'utf8');
+for (const [token, value] of Object.entries(replacements)) {
+  if (!injected.includes(token)) {
+    console.warn(`[inject-widget-env] Placeholder not found: ${token}`);
+  }
+  injected = injected.split(token).join(value);
 }
 
-const injected = source.split(PLACEHOLDER).join(firebaseDbUrl);
 const outPath = resolve(publicDir, 'aftercare-text-widget.js');
 writeFileSync(outPath, injected);
 
-if (firebaseDbUrl) {
-  console.log('[inject-widget-env] Wrote public/aftercare-text-widget.js with FIREBASE_DB_URL');
-} else {
-  console.warn('[inject-widget-env] FIREBASE_DB_URL is unset; widget realtime signals disabled');
-}
+console.log('[inject-widget-env] Wrote public/aftercare-text-widget.js', {
+  apiBase: replacements['@@VITE_API_BASE_URL@@'] || '(default)',
+  apiKey: replacements['@@VITE_API_KEY@@'] ? '(set)' : '(empty)',
+  firebaseDbUrl: replacements['@@FIREBASE_DB_URL@@'] || '(disabled)',
+});

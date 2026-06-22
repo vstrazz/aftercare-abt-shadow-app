@@ -25,11 +25,11 @@
 (function () {
   'use strict';
 
-  const DEFAULT_API_BASE = 'https://aftercare-app-api-18edbb932ed8.herokuapp.com/api/';
+  const DEFAULT_API_BASE = '@@VITE_API_BASE_URL@@';
   // Global API client key (matches API_CLIENT_KEYS on the API). Sent as
   // X-API-Key on every request to satisfy the global requireApiKey gate.
-  // Hosts can override via data-api-key or AFTERCARE_CONFIG.apiKey.
-  const DEFAULT_API_KEY = '';
+  // Hosts can override via AFTERCARE_CONFIG.apiKey.
+  const DEFAULT_API_KEY = '@@VITE_API_KEY@@';
   // account_api_key refers to the tukios_api_key stored on the accounts table.
   const DEFAULT_ACCOUNT_API_KEY = '1';
   // Injected from FIREBASE_DB_URL via scripts/inject-widget-env.mjs (npm run sync-widget).
@@ -113,7 +113,7 @@
     disconnectInboxSignal();
 
     var config = getConfig(root);
-    if (!accountId || !config.firebaseDbUrl || config.firebaseDbUrl === '@@FIREBASE_DB_URL@@') return;
+    if (!accountId || !isValidFirebaseDbUrl(config.firebaseDbUrl)) return;
 
     var streamUrl = config.firebaseDbUrl.replace(/\/$/, '') +
       '/signals/' + encodeURIComponent(String(accountId)) + '/inbox.json';
@@ -321,7 +321,7 @@
     bubble.dataset.messageReaction = reaction;
   }
 
-  function setBubbleContent(bubble, body, meta, image, reaction) {
+  function conversationNeedsAttention(c) {
     if (!c || typeof c !== 'object') return false;
     var last = c.last_message || c.lastMessage || {};
     var direct = c.needs_attention;
@@ -526,15 +526,44 @@
     if (modal) modal.classList.remove('visible');
   }
 
+  function pickConfigValue() {
+    for (var i = 0; i < arguments.length; i++) {
+      var value = arguments[i];
+      if (value != null && value !== '') return value;
+    }
+    return '';
+  }
+
+  function isValidFirebaseDbUrl(url) {
+    if (!url || url === '@@FIREBASE_DB_URL@@') return false;
+    if (/herokuapp\.com/i.test(url)) return false;
+    return true;
+  }
+
   function getConfig(root) {
     var hostEl = (root && root._hostEl) || root;
     const globalConfig = typeof window !== 'undefined' && window.AFTERCARE_CONFIG;
     return {
-      apiBase: (hostEl && hostEl.dataset && hostEl.dataset.apiBase) || (globalConfig && globalConfig.apiBase) || DEFAULT_API_BASE,
+      apiBase: pickConfigValue(
+        globalConfig && globalConfig.apiBase,
+        hostEl && hostEl.dataset && hostEl.dataset.apiBase,
+        DEFAULT_API_BASE,
+      ),
       // account_api_key refers to the tukios_api_key stored on the accounts table.
-      account_api_key: (hostEl && hostEl.dataset && hostEl.dataset.accountApiKey) || (globalConfig && globalConfig.account_api_key) || DEFAULT_ACCOUNT_API_KEY,
-      apiKey: (hostEl && hostEl.dataset && hostEl.dataset.apiKey) || (globalConfig && (globalConfig.apiKey || globalConfig.api_key)) || DEFAULT_API_KEY,
-      firebaseDbUrl: (globalConfig && globalConfig.firebaseDbUrl) || DEFAULT_FIREBASE_DB_URL,
+      account_api_key: pickConfigValue(
+        globalConfig && globalConfig.account_api_key,
+        hostEl && hostEl.dataset && hostEl.dataset.accountApiKey,
+        DEFAULT_ACCOUNT_API_KEY,
+      ),
+      apiKey: pickConfigValue(
+        globalConfig && (globalConfig.apiKey || globalConfig.api_key),
+        hostEl && hostEl.dataset && hostEl.dataset.apiKey,
+        DEFAULT_API_KEY,
+      ),
+      firebaseDbUrl: pickConfigValue(
+        globalConfig && globalConfig.firebaseDbUrl,
+        isValidFirebaseDbUrl(DEFAULT_FIREBASE_DB_URL) ? DEFAULT_FIREBASE_DB_URL : '',
+      ),
     };
   }
 
@@ -730,8 +759,27 @@
         textUi.style.display = 'flex';
       }
       bindEvents(root);
-      loadConversationList(root);
+      waitForWidgetConfig(root, function () {
+        loadConversationList(root);
+      });
     });
+  }
+
+  function waitForWidgetConfig(root, onReady) {
+    var config = getConfig(root);
+    if (config.apiBase && config.account_api_key) {
+      onReady();
+      return;
+    }
+    root._configWaitAttempts = (root._configWaitAttempts || 0) + 1;
+    if (root._configWaitAttempts > 40) {
+      console.warn('[aftercare-text-widget] AFTERCARE_CONFIG not ready; loading with defaults');
+      onReady();
+      return;
+    }
+    setTimeout(function () {
+      waitForWidgetConfig(root, onReady);
+    }, 50);
   }
 
   /**
@@ -964,11 +1012,18 @@
     var count_params = { days_back: 100000 };
 
     return Promise.all([
-      apiGet(config, WIDGET_PATH_PREFIX + '/text-messages/conversations', params).catch(function () { return { conversations: [] }; }),
-      apiGet(config, WIDGET_PATH_PREFIX + '/text-messages/unread-count', count_params).catch(function () { return { count: 0 }; }),
+      apiGet(config, WIDGET_PATH_PREFIX + '/text-messages/conversations', params).catch(function (err) {
+        console.warn('[aftercare-text-widget] conversations request failed:', err);
+        return { data: [] };
+      }),
+      apiGet(config, WIDGET_PATH_PREFIX + '/text-messages/unread-count', count_params).catch(function (err) {
+        console.warn('[aftercare-text-widget] unread-count request failed:', err);
+        return { data: { total_unread: 0 } };
+      }),
     ]).then(function (results) {
       var raw = results[0];
       var conversations = (raw.data != null) ? raw.data : ((raw.conversations != null) ? raw.conversations : (Array.isArray(raw) ? raw : []));
+      if (!Array.isArray(conversations)) conversations = [];
       var unreadCount = parseUnreadCountResponse(results[1]);
       var accountId = parseAccountIdFromUnreadResponse(results[1]);
       if (accountId && String(accountId) !== String(root._accountId)) {
@@ -995,9 +1050,10 @@
           resetConvoPanelForNoSelection(root);
         }
       }
-    }).catch(function () {
+    }).catch(function (err) {
+      console.error('[aftercare-text-widget] loadConversationList failed:', err);
       if (!silent) {
-        listEl.innerHTML = '<div class="ac-list-loading" style="padding:24px;text-align:center;color:#8b8fa3;font-size:14px;">Unable to load conversations. Check data-api-base and network.</div>';
+        listEl.innerHTML = '<div class="ac-list-loading" style="padding:24px;text-align:center;color:#8b8fa3;font-size:14px;">Unable to load conversations. Check API configuration and network.</div>';
         resetConvoPanelForNoSelection(root);
       }
     });
